@@ -8,7 +8,10 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
-const spec = readFileSync(join(root, 'SPEC.md'), 'utf8');
+// Git stores these files with LF, but a Windows checkout with core.autocrlf=true has CRLF. Compare and write LF
+// only, so the line endings of a checkout never make an adapter look stale.
+const lf = (text) => text.replace(/\r\n/g, '\n');
+const spec = lf(readFileSync(join(root, 'SPEC.md'), 'utf8'));
 const version = spec.match(/^# brevity (\S+):/)?.[1] ?? '?';
 
 const outputs = {
@@ -28,7 +31,7 @@ const outputs = {
 let stale = 0;
 for (const [rel, text] of Object.entries(outputs)) {
   const file = join(root, rel);
-  const current = existsSync(file) ? readFileSync(file, 'utf8') : null;
+  const current = existsSync(file) ? lf(readFileSync(file, 'utf8')) : null;
   if (current === text) continue;
   stale++;
   if (process.argv.includes('--check')) { console.error(`stale: ${rel}`); continue; }
