@@ -62,8 +62,10 @@ also counted with `o200k_base` (js-tiktoken) and with characters / 4:
 | mostly Spanish (content rewritten in terse English, quotes kept) | 70 | 35.9% |
 | mostly English | 198 | 23.1% |
 
-- On average each message saves 64.7 tokens. 13 of 268 messages came out longer than their originals: all were
-  short ones, where the plain-language line 1 costs more than the framing it replaces.
+- On average each message saves 64.7 tokens. 13 of 268 messages came out longer than their originals, by 1 to 27
+  tokens each (at most 13% of the original; 128 tokens in all). Their originals run from 80 to 325 tokens, so this is not only a
+  short-message effect. In these messages, the plain-language line 1 and the explicit slots cost more than dropping
+  the framing saved.
 - Line 1, the plain sentence a human sees in the preview, is 12.7% of the encoded tokens. Without it the saving
   would be about 36%, but line 1 carries facts that the body does not repeat.
 - About 28% of the original tokens are identifiers, verbatim quotes and code, which must survive as written

@@ -51,7 +51,8 @@ Each CHANGELOG entry has these parts. The release check fails without them.
 
 - **Criticality**: one level from the table, with the reason in one line.
 - **Why**: the problem, with evidence: the failing message pattern, the audit finding, the issue link, or the
-  measurement. It says what goes wrong without this release.
+  measurement. It says what goes wrong without this release, and cites every issue (`#N`) the release closes. The
+  release check does not verify these citations.
 - **Changes**: what changed, for each surface affected (Claude Code plugin, AGENTS.md block, Gemini extension,
   Cursor rule, Agent Skill, tools).
 - **Evidence**: proof that the change does what it claims and breaks nothing:

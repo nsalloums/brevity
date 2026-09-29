@@ -43,6 +43,23 @@ to anyone changing this repository, human or agent.
 - To test, run `claude plugin validate .`, then `claude -p --plugin-dir .` in a folder with `.brevity/` and in
   one without.
 
+## Issues
+
+- Every problem you find gets a GitHub issue, unless the same PR fixes it. That covers bugs, documentation
+  errors, spec ambiguities, audit findings, a surface that fails, work only the maintainer can do, and ideas with
+  evidence. Search the open issues first, and add to an existing one instead of opening a duplicate.
+- The title names the problem, not the fix. The body says what happens, the evidence or steps to reproduce it,
+  the surfaces affected and, when known, the fix.
+- Give it one criticality label from [RELEASING.md](RELEASING.md): `criticality: critical`, `criticality: high`,
+  `criticality: normal` or `criticality: low`.
+- Give it one kind label: `bug`, `spec`, `surface`, `documentation`, `process`, `enhancement`, or `owner` (work
+  that needs the maintainer's accounts).
+- The PR that fixes it says `Closes #N`. When the fix ships in a release, that release's CHANGELOG entry cites `#N`
+  under Why. A process-only PR has no entry.
+- Security problems never go in a public issue: report them as [SECURITY.md](SECURITY.md) says.
+- Issues are public. Keep examples synthetic. Never quote private messages, transcripts, session titles, message
+  ids, names or paths, and give only aggregate numbers about private data.
+
 ## Writing
 
 - Public files are in English, plain and concrete. A commit subject says what changed, in the imperative, and
