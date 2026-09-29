@@ -5,7 +5,7 @@
 //   node scripts/release-check.mjs --base <ref>    also require a version bump when shipped files changed since <ref>
 //   node scripts/release-check.mjs --tag vX.Y.Z    also require the tag to match the version
 import { execFileSync, spawnSync } from 'node:child_process';
-import { existsSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -20,7 +20,7 @@ const json = (rel) => { try { return JSON.parse(read(rel)); } catch (e) { fail(`
 const git = (...a) => execFileSync('git', a, { cwd: root, encoding: 'utf8' }).trim();
 
 // Paths that change nothing users receive: a PR touching only these needs no release.
-const PROCESS = [/^RELEASING\.md$/, /^CHANGELOG\.md$/, /^\.github\//, /^scripts\//, /^eval\//, /^\.gitignore$/];
+const PROCESS = [/^RELEASING\.md$/, /^CHANGELOG\.md$/, /^AGENTS\.md$/, /^CLAUDE\.md$/, /^\.github\//, /^scripts\//, /^eval\//, /^\.gitignore$/];
 const SEMVER = /^(\d+)\.(\d+)\.(\d+)$/;
 const newer = (a, b) => { const x = a.split('.').map(Number); const y = b.split('.').map(Number); for (let i = 0; i < 3; i++) if (x[i] !== y[i]) return x[i] > y[i]; return false; };
 
@@ -75,6 +75,18 @@ for (const c of commands) if (!c.includes('${CLAUDE_PLUGIN_ROOT}/')) fail(`hook 
 const slots = Number(read('hooks/inject.mjs').match(/const SLOTS = (\d+)/)?.[1]);
 if (commands.length !== slots) fail(`hooks.json has ${commands.length} commands, inject.mjs expects SLOTS = ${slots}`);
 
+// 5b. Skills: front matter the directory and Claude Code can load (name = folder, one-line description <= 1024).
+for (const dir of existsSync(join(root, 'skills')) ? readdirSync(join(root, 'skills')) : []) {
+  const file = join(root, 'skills', dir, 'SKILL.md');
+  if (!existsSync(file)) { fail(`skills/${dir} has no SKILL.md`); continue; }
+  const fm = readFileSync(file, 'utf8').replace(/\r\n/g, '\n').match(/^---\n([\s\S]*?)\n---\n/);
+  if (!fm) { fail(`skills/${dir}/SKILL.md has no front matter`); continue; }
+  const name = fm[1].match(/^name: (.+)$/m)?.[1].trim();
+  const description = fm[1].match(/^description: (.+)$/m)?.[1].trim() ?? '';
+  if (name !== dir) fail(`skills/${dir}/SKILL.md name "${name}" != folder "${dir}"`);
+  if (!description || description.length > 1024) fail(`skills/${dir}/SKILL.md description must be one line of 1-1024 characters`);
+}
+
 // 6. What the Claude plugin directory rejects or holds (pre-submission checklist).
 let files = [];
 try { files = git('ls-files').split('\n').filter(Boolean); } catch { warnings.push('not a git checkout; file checks skipped'); }
@@ -90,7 +102,11 @@ for (const f of files) { const k = f.toLowerCase(); if (lower.has(k)) fail(`two 
 // 7. Against a base ref: shipped files changed => the version must go up.
 const base = opt('--base');
 if (base) {
-  const changed = git('diff', '--name-only', `${base}...HEAD`).split('\n').filter(Boolean);
+  // Committed changes since the merge base, plus uncommitted and untracked ones when run locally.
+  const changed = [...new Set([
+    ...git('diff', '--name-only', git('merge-base', base, 'HEAD')).split('\n'),
+    ...git('ls-files', '--others', '--exclude-standard').split('\n'),
+  ].filter(Boolean))];
   const shipped = changed.filter((f) => !PROCESS.some((re) => re.test(f)));
   let baseVersion = null;
   try { baseVersion = JSON.parse(git('show', `${base}:.claude-plugin/plugin.json`)).version; } catch { /* first release */ }

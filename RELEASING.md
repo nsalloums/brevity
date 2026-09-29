@@ -10,8 +10,8 @@ rare and deliberate, and each one has to justify itself with evidence.
   in through a pull request that the maintainer merges.
 - Work happens on branches. When a set of changes is worth a release, a **release PR** brings it to `main`, and
   that PR bumps the version and adds a [CHANGELOG.md](CHANGELOG.md) entry.
-- A PR that touches only process files (`RELEASING.md`, `CHANGELOG.md`, `.github/`, `scripts/`, `eval/`) changes
-  nothing users receive, so it needs no release.
+- A PR that touches only process files (`RELEASING.md`, `CHANGELOG.md`, `AGENTS.md`, `CLAUDE.md`, `.github/`,
+  `scripts/`, `eval/`) changes nothing users receive, so it needs no release.
 - After merging a release PR, the maintainer tags the merge commit `vX.Y.Z` and publishes a GitHub Release whose
   notes are the CHANGELOG entry.
 
@@ -102,4 +102,4 @@ A release PR merges only when:
 | Codex and other AGENTS.md readers | re-run `node tools/agents-md.mjs <AGENTS.md>` from a checkout of the new tag |
 | Gemini CLI | `gemini extensions update brevity`, or install a fixed version with `--ref vX.Y.Z` |
 | Cursor | copy the new `adapters/cursor/brevity.mdc` |
-| Agent Skill | copy the new `adapters/skills/brevity/` |
+| Agent Skill | copy the new `skills/brevity/` |

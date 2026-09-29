@@ -12,8 +12,8 @@ const spec = readFileSync(join(root, 'SPEC.md'), 'utf8');
 const version = spec.match(/^# brevity (\S+):/)?.[1] ?? '?';
 
 const outputs = {
-  // Agent Skill (agentskills.io): SKILL.md reads the copy next to it.
-  'adapters/skills/brevity/SPEC.md': spec,
+  // Agent Skill (agentskills.io), shipped in the plugin's skills/ folder: SKILL.md reads the copy next to it.
+  'skills/brevity/SPEC.md': spec,
   // Cursor project rule, always applied.
   'adapters/cursor/brevity.mdc': [
     '---',

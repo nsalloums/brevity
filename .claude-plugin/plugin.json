@@ -1,7 +1,8 @@
 {
   "name": "brevity",
-  "version": "0.2.0",
-  "description": "Brevity codes for coding agents: a compact, public, lossless format for messages between agent sessions. Loads the spec (and your project's dictionary) at session start.",
+  "displayName": "Brevity",
+  "version": "0.3.0",
+  "description": "Brevity codes for coding agents: a compact, public, human-auditable format for messages between agent sessions, designed to keep every identifier and decision-relevant fact. The brevity skill encodes and decodes messages on request. In Claude Code, projects that opt in with a .brevity/ folder also get the spec and their dictionary loaded at session start.",
   "author": {
     "name": "Najib",
     "url": "https://github.com/nsalloums"
