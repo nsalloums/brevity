@@ -20,7 +20,7 @@ const json = (rel) => { try { return JSON.parse(read(rel)); } catch (e) { fail(`
 const git = (...a) => execFileSync('git', a, { cwd: root, encoding: 'utf8' }).trim();
 
 // Paths that change nothing users receive: a PR touching only these needs no release.
-const PROCESS = [/^RELEASING\.md$/, /^CHANGELOG\.md$/, /^\.github\//, /^scripts\//, /^eval\//, /^\.gitignore$/];
+const PROCESS = [/^RELEASING\.md$/, /^CHANGELOG\.md$/, /^AGENTS\.md$/, /^CLAUDE\.md$/, /^\.github\//, /^scripts\//, /^eval\//, /^\.gitignore$/];
 const SEMVER = /^(\d+)\.(\d+)\.(\d+)$/;
 const newer = (a, b) => { const x = a.split('.').map(Number); const y = b.split('.').map(Number); for (let i = 0; i < 3; i++) if (x[i] !== y[i]) return x[i] > y[i]; return false; };
 
