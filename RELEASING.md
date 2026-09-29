@@ -12,8 +12,8 @@ rare and deliberate, and each one has to justify itself with evidence.
   that PR bumps the version and adds a [CHANGELOG.md](CHANGELOG.md) entry.
 - A PR that touches only process files (`RELEASING.md`, `CHANGELOG.md`, `AGENTS.md`, `CLAUDE.md`, `.github/`,
   `scripts/`, `eval/`) changes nothing users receive, so it needs no release.
-- After merging a release PR, the maintainer tags the merge commit `vX.Y.Z` and publishes a GitHub Release whose
-  notes are the CHANGELOG entry.
+- Right after a release PR merges, `node scripts/publish-release.mjs` tags the merge commit `vX.Y.Z` and publishes
+  a GitHub Release whose notes are the CHANGELOG entry.
 
 Why `main`: Claude Code installs this marketplace from the default branch and updates a plugin only when its
 `version` changes. The Claude plugin directory scans every new commit on the branch it tracks. Keeping `main`
@@ -81,13 +81,9 @@ A release PR merges only when:
    CHANGELOG entry.
 2. Run `node scripts/release-check.mjs`, then open the release PR against `main`.
 3. The maintainer reviews and merges it.
-4. Tag and publish:
-
-   ```
-   git tag -a vX.Y.Z -m "brevity X.Y.Z" <merge commit>
-   git push origin vX.Y.Z
-   gh release create vX.Y.Z --title "brevity X.Y.Z" --notes-file <the CHANGELOG entry>
-   ```
+4. Right after the merge, publish: `node scripts/publish-release.mjs`. It reads the version on `main`, and if
+   that version has no tag yet, it creates the annotated tag `vX.Y.Z` on the merge commit and a GitHub Release whose
+   notes are the CHANGELOG entry, with links pinned to the tag. After a process-only merge it does nothing.
 
 5. The Claude plugin directory picks up the new commit on `main`, scans it and publishes it according to the
    listing's publish setting. Claude Code users receive it through `/plugin` updates, because the version
