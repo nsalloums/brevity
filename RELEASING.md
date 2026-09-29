@@ -8,8 +8,11 @@ rare and deliberate, and each one has to justify itself with evidence.
 
 - `main` holds released versions only. It is protected: no direct pushes, no force-pushes, and every change comes
   in through a pull request that the maintainer merges.
-- Work happens on branches. When a set of changes is worth a release, a **release PR** brings it to `main`, and
-  that PR bumps the version and adds a [CHANGELOG.md](CHANGELOG.md) entry.
+- Changes that users receive go first to the **`next`** branch, through pull requests, and wait there until they
+  add up to a release. A low-criticality fix, for example, never ships alone. `next` lists them under
+  `## [Unreleased]` in [CHANGELOG.md](CHANGELOG.md), and starts again from `main` after each release.
+- A **release PR** brings `next` to `main`. It bumps the version and turns `## [Unreleased]` into that version's
+  CHANGELOG entry. A critical fix can skip `next` and go to `main` as a release PR of its own.
 - A PR that touches only process files (`RELEASING.md`, `CHANGELOG.md`, `AGENTS.md`, `CLAUDE.md`, `.github/`,
   `scripts/`, `eval/`) changes nothing users receive, so it needs no release.
 - Right after a release PR merges, `node scripts/publish-release.mjs` tags the merge commit `vX.Y.Z` and publishes
@@ -77,15 +80,14 @@ A release PR merges only when:
 
 ## Cutting a release
 
-1. On a branch: make the changes, bump `version` in `.claude-plugin/plugin.json` and `gemini-extension.json` (and
-   the `X.Y` in `SPEC.md`'s title for a major or minor bump), run `node tools/build-adapters.mjs`, and write the
-   CHANGELOG entry.
-2. Run `node scripts/release-check.mjs`, then open the release PR against `main`.
-3. The maintainer reviews and merges it.
+1. On `next`: bump `version` in `.claude-plugin/plugin.json` and `gemini-extension.json` (and the `X.Y` in
+   `SPEC.md`'s title for a major or minor bump), run `node tools/build-adapters.mjs`, and turn `## [Unreleased]`
+   into the entry `## [X.Y.Z] - YYYY-MM-DD` with all its parts.
+2. Run `node scripts/release-check.mjs --base origin/main`, then open the release PR from `next` to `main`.
+3. Merge it with a squash. The merge deletes `next`, and it is created again from `main` for the next change.
 4. Right after the merge, publish: `node scripts/publish-release.mjs`. It reads the version on `main`, and if
    that version has no tag yet, it creates the annotated tag `vX.Y.Z` on the merge commit and a GitHub Release whose
    notes are the CHANGELOG entry, with links pinned to the tag. After a process-only merge it does nothing.
-
 5. The Claude plugin directory picks up the new commit on `main`, scans it and publishes it according to the
    listing's publish setting. Claude Code users receive it through `/plugin` updates, because the version
    changed.
