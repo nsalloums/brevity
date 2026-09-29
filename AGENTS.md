@@ -16,13 +16,15 @@ to anyone changing this repository, human or agent.
 
 - Every commit on `main` is a release. `main` is protected: changes arrive by pull request, and the maintainer
   merges them.
-- A PR that changes anything users receive bumps the version (`.claude-plugin/plugin.json`,
-  `gemini-extension.json`, and the `X.Y` in `SPEC.md`'s title). It also adds a [CHANGELOG.md](CHANGELOG.md) entry
-  with Criticality, Why, Changes, Evidence, Compatibility and Upgrade. [RELEASING.md](RELEASING.md) defines each
-  part and the criticality levels.
+- A change that users receive goes in a pull request to `next`, and is listed under `## [Unreleased]` in
+  [CHANGELOG.md](CHANGELOG.md). A release PR later brings `next` to `main` and bumps the version
+  (`.claude-plugin/plugin.json`, `gemini-extension.json`, and the `X.Y` in `SPEC.md`'s title). It also turns
+  that list into the version's entry, with Criticality, Why, Changes, Evidence, Compatibility and Upgrade.
+  [RELEASING.md](RELEASING.md) defines each part and the criticality levels.
 - Versions follow semver read from the protocol: major when a message written under the previous version could
   decode differently, minor when the protocol or its surfaces gain something, patch when meaning is unchanged.
-- Before opening a PR, run `node scripts/release-check.mjs --base origin/main`. CI runs the same check.
+- Before opening a PR, run `node scripts/release-check.mjs`, adding `--base origin/main` for a release PR. CI runs
+  the same check.
 
 ## Changing the spec
 

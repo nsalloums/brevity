@@ -2,7 +2,7 @@ name: release check
 
 on:
   pull_request:
-    branches: [main]
+    branches: [main, next]
   push:
     branches: [main]
     tags: ['v*']
@@ -21,11 +21,14 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
-      - name: Release check (pull request against main)
-        if: github.event_name == 'pull_request'
+      - name: Release check (release PR against main)
+        if: github.event_name == 'pull_request' && github.base_ref == 'main'
         env:
           BASE_REF: ${{ github.base_ref }}
         run: node scripts/release-check.mjs --base "origin/$BASE_REF"
+      - name: Release check (pull request against next)
+        if: github.event_name == 'pull_request' && github.base_ref == 'next'
+        run: node scripts/release-check.mjs
       - name: Release check (tag)
         if: startsWith(github.ref, 'refs/tags/v')
         env:
