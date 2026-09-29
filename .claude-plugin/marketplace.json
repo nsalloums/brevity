@@ -1,0 +1,15 @@
+{
+  "name": "brevity",
+  "description": "brevity: brevity codes for coding agents (a compact, public, lossless format for messages between agent sessions)",
+  "owner": {
+    "name": "Najib",
+    "url": "https://github.com/nsalloums"
+  },
+  "plugins": [
+    {
+      "name": "brevity",
+      "source": "./",
+      "description": "Brevity codes for coding agents: compact, lossless, public messages between agent sessions."
+    }
+  ]
+}

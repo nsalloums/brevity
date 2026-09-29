@@ -1,0 +1,19 @@
+{
+  "name": "brevity",
+  "version": "0.2.0",
+  "description": "Brevity codes for coding agents: a compact, public, lossless format for messages between agent sessions. Loads the spec (and your project's dictionary) at session start.",
+  "author": {
+    "name": "Najib",
+    "url": "https://github.com/nsalloums"
+  },
+  "homepage": "https://github.com/nsalloums/brevity",
+  "repository": "https://github.com/nsalloums/brevity",
+  "license": "MIT",
+  "keywords": [
+    "agents",
+    "multi-agent",
+    "messaging",
+    "tokens",
+    "protocol"
+  ]
+}

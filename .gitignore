@@ -1,0 +1,4 @@
+.lab/
+node_modules/
+.claude/
+*.local.md
