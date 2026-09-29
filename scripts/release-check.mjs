@@ -15,7 +15,8 @@ const opt = (name) => { const i = args.indexOf(name); return i >= 0 ? args[i + 1
 const errors = [];
 const warnings = [];
 const fail = (msg) => errors.push(msg);
-const read = (rel) => readFileSync(join(root, rel), 'utf8');
+// LF, as git stores it: a Windows checkout with CRLF must not change sizes or comparisons.
+const read = (rel) => readFileSync(join(root, rel), 'utf8').replace(/\r\n/g, '\n');
 const json = (rel) => { try { return JSON.parse(read(rel)); } catch (e) { fail(`${rel}: ${e.message}`); return {}; } };
 const git = (...a) => execFileSync('git', a, { cwd: root, encoding: 'utf8' }).trim();
 

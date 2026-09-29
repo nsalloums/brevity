@@ -3,6 +3,18 @@
 Every entry follows [RELEASING.md](RELEASING.md): a criticality level, why the release exists, what changed, the
 evidence, compatibility and upgrade steps. Versions follow semantic versioning read from the protocol's side.
 
+## [Unreleased]
+
+Changes waiting on `next` for the next release (see [RELEASING.md](RELEASING.md)).
+
+- **#5, low.** `tools/build-adapters.mjs` now compares and writes LF, so a Windows checkout with CRLF line endings
+  (`core.autocrlf=true`) no longer reports the adapters as stale. Evidence:
+  - With `SPEC.md` and both adapters checked out as CRLF, `--check` failed with
+    `stale: adapters/cursor/brevity.mdc` before the fix, and passes after it.
+  - Write mode leaves the files alone.
+  - An LF checkout still passes, and a real change to `SPEC.md` is still reported as stale.
+  - `scripts/release-check.mjs` also reads files as LF, so sizes and comparisons match what git stores.
+
 ## [0.3.0] - 2026-09-29
 
 **Criticality:** high. A review against the Claude plugin directory's pre-submission checklist and Software
