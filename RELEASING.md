@@ -102,4 +102,4 @@ A release PR merges only when:
 | Codex and other AGENTS.md readers | re-run `node tools/agents-md.mjs <AGENTS.md>` from a checkout of the new tag |
 | Gemini CLI | `gemini extensions update brevity`, or install a fixed version with `--ref vX.Y.Z` |
 | Cursor | copy the new `adapters/cursor/brevity.mdc` |
-| Agent Skill | copy the new `adapters/skills/brevity/` |
+| Agent Skill | copy the new `skills/brevity/` |
