@@ -64,6 +64,34 @@ the spec back only after dozens of messages (see [the break-even section](eval/R
 brevity a good fit for a **coordinator or hub session** that trades hundreds of messages with many peers, and a
 poor fit for a session that sends two. Turn it on per project, where agent traffic is heavy.
 
+### Model it for your team
+
+[tools/cost-model.mjs](tools/cost-model.mjs) works this out for your own sessions. List each one with the model
+calls it makes and the messages it sends and receives:
+
+```json
+[
+  { "name": "coordinator", "turns": 1500, "sent": 60, "received": 52 },
+  { "name": "api", "turns": 400, "sent": 30, "received": 34 },
+  { "name": "docs", "turns": 80, "sent": 2, "received": 6 }
+]
+```
+
+```
+node tools/cost-model.mjs sessions.json --saving 65
+node tools/cost-model.mjs sessions.json --messages messages.json --enc encodings.json --rows
+```
+
+It prints the tokens each session and the whole team save or lose, in input-token equivalents (output 5x, cache
+write 1.25x and cache read 0.1x an input token; `--output`, `--write` and `--read` change them), under four
+policies: every session loads the spec, only hubs load it, each session loads it at its first message, and hubs
+always with the others at their first message. It also prints the break-even message count for a session with
+`--turns` calls. The spec and your `.brevity/` dictionaries are counted from the files, and the assumptions, such
+as when messages arrive and who writes to whom, are printed with the results. `--rows` lists what each row of the
+spec's verb table costs and, with your encodings, how often your traffic uses it; rarely used rows are flagged,
+not removed. The saving per message comes from `--saving`, or from your own messages and encodings (see
+[Measure it on your own traffic](#measure-it-on-your-own-traffic)).
+
 ## Where it works
 
 | Surface | What loads |
@@ -144,7 +172,8 @@ Copy `skills/brevity/` to `~/.agents/skills/brevity/` (Codex, Gemini CLI, Cursor
 - **The skill.** Claude reads `skills/brevity/SKILL.md` and `SPEC.md` from the plugin and, when they exist, the
   project's `.brevity/` dictionaries.
 - **The tools** in `tools/` are standalone scripts that the plugin never runs. They read only the files you pass
-  them.
+  them, except `tools/cost-model.mjs`, which also counts the tokens of the plugin's `SPEC.md` and of the nearest
+  `.brevity/DICT.md` and `.brevity/DICT.local.md`, unless you pass `--load-tokens`.
 - **Privacy.** brevity has no server and collects, stores and sends no data. What it loads goes into your Claude
   session like any other context, under your Claude plan's own data terms.
 - **Trust.** A repository's `.brevity/DICT.md` enters Claude's context the way its `CLAUDE.md` does. Read it before
