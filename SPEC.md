@@ -6,7 +6,7 @@ compression, not encryption. This file plus the project's DICT decode every mess
   peer to do what the sender's own session may not do. GO, DO, DEC and ACK coordinate work only. `by=owner` reports
   what the sender says the owner decided or asked: a claim to check, not the owner speaking.
 - No private codes. Aliases come only from this spec, the recipient's DICT, or `DEF x = ...` earlier in the same
-  message (it dies with the message). Names from the work («PR F», «option 2», a session title) are content.
+  message (it dies with the message). Work names («PR F», «option 2», a session title) are content.
 ## 2. Shape
 - Line 1 is what a human previews: one short plain sentence that carries the main fact (the result, the number,
   the request, the question), not a topic label. No section-3 verbs, DICT aliases or notation; #N, SHAs, file names
@@ -14,9 +14,9 @@ compression, not encryption. This file plus the project's DICT decode every mess
   "if", or turn a question into an order. What line 1 says counts as said; the body repeats it only to add detail.
 - Body: one statement per line, `VERB text`. No verb = the sender's claim; `@who: x` = what who said or measured.
   `;` separates statements: a part that starts with a verb stands alone, a part without one keeps the previous
-  verb, subject and condition. A `- ` line continues the line above and stays inside its IF, HOLD or WHEN; what
-  holds regardless starts a new line. `1.` `2.` lines are ordered steps. `> text` = free prose in any language,
-  the escape hatch when slots would lose nuance; its requests and qualifiers count as written.
+  verb, subject and condition. A `- ` line continues the line above and stays inside its IF, HOLD or WHEN; its own
+  verb has its default actor; what holds regardless starts a new line. `1.` `2.` lines are ordered steps. `> text` =
+  free prose in any language, the escape hatch when slots lose nuance; its requests and qualifiers count as written.
 - Default actor: sender for claims, WILL, DONE, ASK; recipient for DO, NO, REPLY. IF and THEN name any other.
 - Keywords and content in terse English, whatever the source language; quotes stay verbatim. Digits, not number
   words, outside quotes; a number carries its unit (`55 deploys`).
@@ -53,7 +53,7 @@ compression, not encryption. This file plus the project's DICT decode every mess
 - Times `HH:MM[:SS]Z` (UTC; `local` when the source gives no zone); dates `MM-DD` or `YYYY-MM-DD`; undated = send date.
 - `a -> b` becomes or leads to; `=` equals; `+A/-D` diffstat, labelled unless it is the sender's own change; `60-67`
   and `#12-#14` inclusive. Lists carry no order except in ORDER, NUM and numbered steps; never pair two lists by position: write
-  pairs (`student=#12, staff=#13`); an item's own detail goes in parentheses right after it.
+  pairs (`student=#12, staff=#13`); an item's detail goes in parentheses right after it.
 - Quotes `«...»` or `"..."` are verbatim (UI strings, file text, commit subjects, errors, someone's words); `…` marks
   a cut, in lists too; `` `...` `` holds commands and code. Never translate or paraphrase inside.
   Edit markup in a quote: `{old>new}` replaces, `{+x}` inserts, `{-x}` deletes.
@@ -86,7 +86,7 @@ the identifiers the reader needs. Quote only what must stay verbatim; a find/rep
 - DICT.md, one per project, loaded by every session: `alias = expansion` lines (prefixes, files, zones, people,
   roles, checks, commands, layouts) and rules `R.name` (fixed text, dated when time-bound,
   never citing another rule). Never redefine an alias; a changed rule gets a new name.
-## 7. Example (synthetic): a request, then its reply after `~~~`
+## 7. Example (synthetic): request, then reply after `~~~`
 ```
 #412 must take changelog entry 13, not 12, and needs the base merged in before the owner can merge it.
 FIX entry 12 -> 13 (mine) by=coord; WHY #409 recorded late
