@@ -3,6 +3,45 @@
 Every entry follows [RELEASING.md](RELEASING.md): a criticality level, why the release exists, what changed, the
 evidence, compatibility and upgrade steps. Versions follow semantic versioning read from the protocol's side.
 
+## [Unreleased]
+
+Changes waiting on `next` for the next release (see [RELEASING.md](RELEASING.md)).
+
+- **#9, normal.** `SPEC.md` now gives one reading to the points that blind decoders and a fresh-session pilot
+  found unclear: who waits in a HOLD on an act (whoever does it), what "lands" means, when a REPLY without WHEN or
+  an unanswered question is due (once known), `WILL NOT x UNTIL c`, which tree a line number refers to, `n+`
+  numbers not fixed ahead, a body that restates line 1, `has=#N`, a FIX that does not say whose, `…` in a list,
+  `@Name` for a person, `Closes #N` as an issue, `MERGEABLE` next to `CLEAN`, and the actor of a verb on a `- `
+  line. The spec's example no longer puts a NO on a DO line.
+  Evidence (#10, five more full blind passes over the 268 private messages, method in eval/RESULTS.md):
+  - First-pass confirmed decision-relevant losses per pass: 29 in pass 4, then 9, 19, 13, 12 and 13 in passes 5-9.
+    Of those 66, 58 were encoder errors, 5 decoder errors and 3 came from the spec, each clarified here. All were
+    fixed and re-audited, so none is known; #10 stays open because no pass came back clean.
+  - Tokens, all 268 messages: 63,861 -> 46,521 (27.2%, median 152) at 0.2.0, and 63,861 -> 47,776 (25.2%, median
+    160.5) now. The 2 points are the facts passes 5-9 restored (1,255 tokens), not the spec change: the
+    clarifications change no encoding.
+  - `tools/idcheck.mjs`: 2,637 identifiers, 0 missing. The spec: 2,641 -> 2,674 tokens (+1.2%), 99 lines, 9,163 ->
+    9,185 characters (9,284 with CRLF line endings), one hook part either way.
+  - Break-even with `tools/cost-model.mjs` and 200 calls: 76-101 messages per session (`--saving 60 --load-tokens
+    3200`). 0.2.0's inputs give 68-91 with the same tool; eval/RESULTS.md said 70-95, a rounded hand estimate.
+  - Compatibility: a message written under 0.4 reads the same, with two exceptions.
+    - Added forms 0.4 did not define: `@Name`, `has=#N`, `WILL NOT x UNTIL c`.
+    - A due time where 0.4 gave none: a REPLY without WHEN, and a question with no REPLY.
+    - A reading where 0.4 gave none: a HOLD on an act (`HOLD me UNTIL c` still reads as in 0.4), a FIX without
+      whose, a line number with no tree.
+    - Terms 0.4 used without defining: lands, `n+`, `…`, `MERGEABLE`.
+    - A 0.4 ambiguity settled: a verb on a `- ` line takes its own default actor, not the parent line's; one
+      decoder reading the 0.4 wording took the parent's.
+    - A reading 0.4 implied, replaced: a body line that restates line 1 adds detail to it, where 0.4's «the body
+      does not repeat it» implied a new statement. No such case is known.
+    - Exception 1: a 0.4 decoder applying "bare #N = pull request" literally reads an unquoted `Closes #N` as a
+      pull request, and now it reads as an issue, which is what GitHub's closing keyword closes. 7 of the 268
+      encodings carry it (4 in backticks, 3 unquoted); no blind decoder in passes 2-9 read its target as a pull
+      request.
+    - Exception 2: an unquoted `@media` or `@scope/pkg` was unknown content under 0.4 and could now read as a
+      `@Name`. Code belongs in backticks: 4 final encodings left it unquoted (an encoder error), and none of their
+      24 decodings in passes 4-9 read it as a name.
+
 ## [0.4.0] - 2026-09-30
 
 **Criticality:** high. The README said that opting a project in was enough, and for a hub-and-spoke team with
