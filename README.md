@@ -82,7 +82,7 @@ to save on a handful of messages. For this team, not using brevity beats every w
 cost model finds that a read-only reader card of about 300 to 440 tokens would keep the team ahead: up to 442
 tokens under its default assumptions, and up to 305 if each peer's first message arrives at its first call. That
 is a modeled result under the assumptions the tool prints, not a shipped feature; brevity has no reader card, and
-[issue #23](https://github.com/nsalloums/brevity/issues/23) tracks the design.
+[issue #11](https://github.com/nsalloums/brevity/issues/11) tracks the design.
 
 Opt a project in only when every session in it will be busy, such as a coordinator and a few long-lived sessions
 that trade hundreds of messages, and check your own team with [tools/cost-model.mjs](tools/cost-model.mjs) first.

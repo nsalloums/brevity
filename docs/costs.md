@@ -188,8 +188,8 @@ total                                            -2,672,350  -623,875     -1,663
 - **Loading only in the hub saves nothing,** because the peers cannot read what the hub writes.
 - **Only a read-only card comes out ahead.** In hub+reader, the hub loads the full spec and each peer loads a card
   that only decodes, at the first message it receives. With a 300-token card the team nets +117,603, and the largest
-  card that keeps it ahead is 442 tokens. brevity has no reader card: this is a modeled result, and issue #23 tracks
-  the design.
+  card that keeps it ahead is 442 tokens. brevity has no reader card: this is a modeled result, and
+  [issue #11](https://github.com/nsalloums/brevity/issues/11) tracks the design.
 
 The largest card depends on the assumptions. Each row adds one option to the command above:
 
