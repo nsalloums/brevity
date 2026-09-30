@@ -21,6 +21,13 @@ Changes waiting on `next` for the next release (see [RELEASING.md](RELEASING.md)
   3,100 tokens and 200 calls); tests: `node tools/cost-model.test.mjs`.
 - **#21, low.** The README links to the new `eval/RELATED.md`, which lists related formats, research and tools
   for agent messages, each checked against its primary source, and how brevity's approach differs from each.
+- **#23, high.** The README's «When it pays off» no longer suggests that opting a project in is enough. It says
+  brevity saves tokens only when the sessions that load it exchange many messages each, shows a synthetic
+  hub-and-spoke team that loses tokens under every way brevity can load today, and gives the modeled result that a
+  read-only reader card of about 300 to 440 tokens would keep that team ahead.
+- **#24, normal.** New `docs/costs.md`: the token economics of multi-agent setups in plain words, three synthetic
+  team shapes (in `docs/teams/`) worked through with `tools/cost-model.mjs`, practical rules, and a cited source for
+  every price and ratio, with the assumptions marked.
 
 ## [0.3.0] - 2026-09-29
 
