@@ -37,3 +37,10 @@ jobs:
       - name: Release check (main)
         if: github.ref == 'refs/heads/main'
         run: node scripts/release-check.mjs
+      # The shell lists the files, so a branch without tests passes whatever node --test does with no match.
+      - name: Tools' tests
+        run: |
+          shopt -s nullglob
+          tests=(tools/*.test.mjs)
+          if [ ${#tests[@]} -eq 0 ]; then echo "no tools/*.test.mjs to run"; exit 0; fi
+          node --test "${tests[@]}"
