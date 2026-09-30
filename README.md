@@ -85,10 +85,12 @@ node tools/cost-model.mjs sessions.json --messages messages.json --enc encodings
 It prints the tokens each session and the whole team save or lose, in input-token equivalents (output 5x, cache
 write 1.25x and cache read 0.1x an input token; `--output`, `--write` and `--read` change them), under four
 policies: every session loads the spec, only hubs load it, each session loads it at its first message, and hubs
-always with the others at their first message. It also prints the break-even message count for a session with
-`--turns` calls. The spec and your `.brevity/` dictionaries are counted from the files, and the assumptions, such
-as when messages arrive and who writes to whom, are printed with the results. `--rows` lists what each row of the
-spec's verb table costs and, with your encodings, how often your traffic uses it; rarely used rows are flagged,
+always with the others at their first message. `--reader-tokens N` adds a fifth: hubs load the spec, and the
+other sessions load a reader card of N tokens that only decodes. brevity has no reader card yet, and the output
+gives the largest card that would keep the team ahead. It also prints the break-even message count for a session
+with `--turns` calls. The spec and your `.brevity/` dictionaries are counted from the files, and the assumptions,
+such as when messages arrive and who writes to whom, are printed with the results. `--rows` lists what each row of
+the spec's verb table costs and, with your encodings, how often your traffic uses it; rarely used rows are flagged,
 not removed. The saving per message comes from `--saving`, or from your own messages and encodings (see
 [Measure it on your own traffic](#measure-it-on-your-own-traffic)).
 

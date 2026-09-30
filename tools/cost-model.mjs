@@ -2,7 +2,7 @@
 // brevity cost model: does the spec save tokens for a team of sessions, and where should it load?
 //
 //   node tools/cost-model.mjs [sessions.json] (--saving N | --messages messages.json --enc encodings.json)
-//        [--turns N] [--threshold N] [--first uniform|start] [--stub N]
+//        [--turns N] [--threshold N] [--first uniform|start] [--stub N] [--reader-tokens N [--reader-writes]]
 //        [--spec SPEC.md] [--dict DICT.md]... [--no-dict] [--load-tokens N]
 //        [--output 5] [--write 1.25] [--read 0.1] [--rows] [--rare 5] [--json]
 //
@@ -36,6 +36,12 @@
 //                  carries only --stub tokens before that, or throughout if it has none (default 138: the
 //                  skill's name and description)
 //   hub+first      hubs load at their first call, the other sessions at their first message
+//   hub+reader     only with --reader-tokens N: hubs load the spec and dictionaries at their first call;
+//                  the other sessions load a reader card of N tokens at the first message they receive,
+//                  and carry the stub. A reader card only decodes, so readers write in prose and their
+//                  messages save nothing; --reader-writes lets them write brevity too (they then load it at
+//                  their first message, sent or received). The output gives the largest card that keeps
+//                  hub+reader above 0.
 // --first uniform (default): a session's n messages are spread evenly over its calls, the k-th at call
 // T*k/(n+1), so the first arrives at T/(n+1). --first start: the first arrives at call 0 (a session
 // started by a delegation prompt). A session's "first" field overrides both.
@@ -74,6 +80,14 @@ export function firstCall(s, first = 'uniform') {
   if (!n) return null;
   if (s.first !== undefined) return Math.min(Math.max(s.first, 0), s.turns);
   return first === 'start' ? 0 : s.turns / (n + 1);
+}
+
+// The call at which a session receives its first message, or null if it receives none. Received messages
+// are spread like the rest, so the first of r arrives at T/(r+1); --first start and "first" as above.
+export function firstReceived(s, first = 'uniform') {
+  if (!s.received) return null;
+  if (s.first !== undefined) return Math.min(Math.max(s.first, 0), s.turns);
+  return first === 'start' ? 0 : s.turns / (s.received + 1);
 }
 
 // Calls left after each of a session's messages, summed: the first arrives at call F and the other
@@ -125,8 +139,11 @@ export function pairs(sessions, { iterations = 20000, tolerance = 0.01 } = {}) {
   return { m, converged };
 }
 
-// Net per session and per policy.
-export function model(sessions, { load, saving, prices = PRICES, stub = STUB, first = 'uniform', threshold } = {}) {
+// Net per session and per policy; with `reader` (tokens), also hub+reader.
+export function model(sessions, {
+  load, saving, prices = PRICES, stub = STUB, first = 'uniform', threshold, reader, readerWrites = false,
+} = {}) {
+  const used = reader === undefined ? POLICIES : [...POLICIES, 'hub+reader'];
   const sentShare = (s) => (messages(s) ? s.sent / messages(s) : 0.5);
   const be = sessions.map((s) => breakEven({ load, saving, turns: s.turns, sentShare: sentShare(s), prices }));
   const hub = sessions.map((s, i) => messages(s) >= (threshold ?? be[i]));
@@ -145,26 +162,45 @@ export function model(sessions, { load, saving, prices = PRICES, stub = STUB, fi
       'first-message': onDemand,
       'hub+first': hub[i] ? { at: 0, ...all } : onDemand,
     };
+    if (reader !== undefined) {
+      // Hubs write to everyone who can read; a session receives brevity only from hubs, unless readers write.
+      const received = readerWrites ? s.received : withHubs.received;
+      plans['hub+reader'] = hub[i] ? { at: 0, sent: s.sent, received }
+        : readerWrites ? { ...onDemand, tokens: reader }
+        : { at: firstReceived(s, first), tokens: reader, stub: true, sent: 0, received };
+    }
     const net = {};
     const detail = {};
-    for (const policy of POLICIES) {
+    for (const policy of used) {
       // The policy sets when the session loads; its messages arrive when they arrive.
       const plan = plans[policy];
-      const cost = (plan.at === null ? 0 : carry(load, s.turns - plan.at, prices)) + (plan.stub ? carry(stub, s.turns, prices) : 0);
+      const cost = (plan.at === null ? 0 : carry(plan.tokens ?? load, s.turns - plan.at, prices))
+        + (plan.stub ? carry(stub, s.turns, prices) : 0);
       const gain = plan.at === null ? 0 : saved(s, F, plan.sent, plan.received, saving, prices);
       net[policy] = gain - cost;
       detail[policy] = { loadsAt: plan.at, saved: gain, cost, savedMessages: plan.sent + plan.received };
     }
     return { ...s, breakEven: be[i], hub: hub[i], firstMessageAt: F, net, detail };
   });
-  const policies = POLICIES.map((name) => ({
+  const policies = used.map((name) => ({
     name,
     net: rows.reduce((a, r) => a + r.net[name], 0),
     saved: rows.reduce((a, r) => a + r.detail[name].saved, 0),
     cost: rows.reduce((a, r) => a + r.detail[name].cost, 0),
     loading: rows.filter((r) => r.detail[name].loadsAt !== null).length,
   }));
-  return { sessions: rows, policies, hubs: hub.filter(Boolean).length, pairsConverged: converged };
+  const result = { sessions: rows, policies, hubs: hub.filter(Boolean).length, pairsConverged: converged };
+  if (reader !== undefined) {
+    // hub+reader's net falls by `perToken` for every token of the card; readerMax is where it reaches 0.
+    const perToken = rows.reduce((a, r, i) => {
+      const at = r.detail['hub+reader'].loadsAt;
+      return a + (hub[i] || at === null ? 0 : carry(1, r.turns - at, prices));
+    }, 0);
+    const atZero = policies[policies.length - 1].net + reader * perToken;
+    const readerMax = perToken > 0 ? Math.max(0, atZero / perToken) : null; // null: no session loads the card
+    Object.assign(result, { reader, readerWrites, readerMax, readerNetAtZero: atZero });
+  }
+  return result;
 }
 
 // Rows of SPEC.md's verb table (the table whose header starts with "verb"), with the verbs each defines:
@@ -222,7 +258,7 @@ function parseArgs(argv) {
   const opts = { dict: [] };
   const positional = [];
   const valued = ['--saving', '--messages', '--enc', '--turns', '--threshold', '--first', '--stub', '--spec', '--dict',
-    '--load-tokens', '--output', '--write', '--read', '--rare'];
+    '--load-tokens', '--output', '--write', '--read', '--rare', '--reader-tokens'];
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (valued.includes(a)) {
@@ -230,7 +266,7 @@ function parseArgs(argv) {
       const key = a.slice(2);
       if (key === 'dict') opts.dict.push(argv[++i]);
       else opts[key] = argv[++i];
-    } else if (['--rows', '--json', '--no-dict'].includes(a)) opts[a.slice(2)] = true;
+    } else if (['--rows', '--json', '--no-dict', '--reader-writes'].includes(a)) opts[a.slice(2)] = true;
     else if (a.startsWith('--')) throw new Error(`unknown option ${a}`);
     else positional.push(a);
   }
@@ -240,7 +276,8 @@ function parseArgs(argv) {
     if (!Number.isFinite(v) || v < min) throw new Error(`--${key} must be a number >= ${min}`);
     opts[key] = v;
   };
-  for (const key of ['saving', 'turns', 'threshold', 'stub', 'load-tokens', 'output', 'write', 'read', 'rare']) num(key);
+  for (const key of ['saving', 'turns', 'threshold', 'stub', 'load-tokens', 'output', 'write', 'read', 'rare', 'reader-tokens']) num(key);
+  if (opts['reader-writes'] && opts['reader-tokens'] === undefined) throw new Error('--reader-writes needs --reader-tokens');
   if (opts.first !== undefined && !['uniform', 'start'].includes(opts.first)) throw new Error('--first must be uniform or start');
   if (positional.length > 1) throw new Error(`one sessions file, got ${positional.join(', ')}`);
   return { ...opts, sessionsFile: positional[0] };
@@ -316,7 +353,10 @@ export async function run(argv, { cwd = process.cwd() } = {}) {
   }
   if (sessions && saving) {
     const first = o.first ?? 'uniform';
-    const r = model(sessions, { load: load.tokens, saving: saving.tokens, prices, stub: o.stub ?? STUB, first, threshold: o.threshold });
+    const r = model(sessions, {
+      load: load.tokens, saving: saving.tokens, prices, stub: o.stub ?? STUB, first, threshold: o.threshold,
+      reader: o['reader-tokens'], readerWrites: !!o['reader-writes'],
+    });
     result.stub = o.stub ?? STUB;
     result.first = first;
     result.threshold = o.threshold ?? 'own break-even';
@@ -333,11 +373,18 @@ export async function run(argv, { cwd = process.cwd() } = {}) {
       + ' (a session\'s "first" field or --first start moves the first)',
     'a message saves only when both sessions have loaded the spec; sessions the file does not list load it under'
       + ' every policy except hub-only',
-    'hub-only pairs messages in proportion to each session\'s sent and received totals, no session writing to itself;'
-      + ' what the listed sessions cannot place among themselves goes to unlisted sessions',
+    `${result.reader === undefined ? 'hub-only pairs' : 'hub-only and hub+reader pair'} messages in proportion to each`
+      + ' session\'s sent and received totals, no session writing to itself; what the listed sessions cannot place'
+      + ' among themselves goes to unlisted sessions',
     'the cache stays warm: the spec is written once and read on every later call',
     'the sender\'s own cache write of its message is left out, as in eval/RESULTS.md',
   ];
+  if (result.reader !== undefined) {
+    result.assumptions.push(result.readerWrites
+      ? 'hub+reader: readers read and write brevity with the card, and load it at their first message'
+      : 'hub+reader: a reader card only decodes, so readers write in prose; they load it at the first message they'
+        + ' receive (the first of r at T/(r+1)), and sessions the file does not list act as readers');
+  }
   return result;
 }
 
@@ -364,25 +411,37 @@ export function render(r) {
       'hub-only': `${r.hubs} from call 0`,
       'first-message': `${r.policies[2].loading} from first message; ${n} carry the stub`,
       'hub+first': `${r.hubs} from call 0, ${r.policies[3].loading - r.hubs} from first message; ${others} carry the stub`,
+      'hub+reader': `${r.hubs} from call 0, ${(r.policies[4]?.loading ?? 0) - r.hubs} readers from first ${r.readerWrites ? '' : 'received '}message; ${others} carry the stub`,
     };
+    const names = r.policies.map((x) => x.name);
     const sent = r.sessions.reduce((a, s) => a + s.sent, 0);
     const received = r.sessions.reduce((a, s) => a + s.received, 0);
     out.push('', `team: ${plural(n, 'session')}, ${plural(sent, 'message')} sent, ${fmt(received)} received`);
     if (sent !== received) out.push(`note: sent and received differ by ${fmt(Math.abs(sent - received))}, so some messages ${sent > received ? 'go to' : 'come from'} sessions the file does not list`);
     out.push(`hub: a session with ${typeof r.threshold === 'number' ? `at least ${fmt(r.threshold)} messages` : 'at least its own break-even in messages (--threshold N sets one count)'}; ${r.hubs} of ${n}`);
     out.push(`stub: the ${fmt(r.stub)} tokens a session carries so it can load on its first message (the skill's name and description)`);
+    if (r.reader !== undefined) {
+      out.push(`reader card: ${fmt(r.reader)} tokens (--reader-tokens), ${r.readerWrites ? 'to read and write brevity (--reader-writes)' : 'to read only: readers write in prose'}`);
+    }
     out.push(table([['policy', 'sessions that load', 'saved', 'cost', 'net'],
       ...r.policies.map((x) => [x.name, loads[x.name], fmt(x.saved), fmt(x.cost), signed(x.net)])]));
     const best = r.policies.find((x) => x.name === r.best);
     out.push(best.net > 0
       ? `highest net: ${best.name} (${signed(best.net)}). A model, not a decision: check the assumptions below.`
       : `every policy costs more than it saves: not loading brevity (net 0) beats the best, ${best.name} (${signed(best.net)}).`);
+    if (r.reader !== undefined) {
+      out.push(r.readerMax === null ? 'no session loads the reader card, so its size changes nothing.'
+        : r.readerNetAtZero > 0 ? `hub+reader stays above 0 with a reader card of up to ${fmt(Math.ceil(r.readerMax) - 1)} tokens.`
+        : `no reader card makes hub+reader positive: even a card of 0 tokens nets ${signed(r.readerNetAtZero)}.`);
+    }
     if (r.hubs < 2) out.push(`hub-only saves nothing with ${r.hubs ? 'one hub' : 'no hubs'}: a message saves only between two sessions that loaded the spec.`);
     out.push('', 'net per session (0 = no brevity):');
-    out.push(table([['session', 'calls', 'sent', 'received', 'break-even', 'hub', ...POLICIES],
-      ...r.sessions.map((s) => [s.name, fmt(s.turns), fmt(s.sent), fmt(s.received), fmt(s.breakEven), s.hub ? 'yes' : '', ...POLICIES.map((k) => signed(s.net[k]))]),
+    out.push(table([['session', 'calls', 'sent', 'received', 'break-even', 'hub', ...names],
+      ...r.sessions.map((s) => [s.name, fmt(s.turns), fmt(s.sent), fmt(s.received), fmt(s.breakEven), s.hub ? 'yes' : '', ...names.map((k) => signed(s.net[k]))]),
       ['total', '', '', '', '', '', ...r.policies.map((x) => signed(x.net))]]));
-    if (!r.pairsConverged) out.push('warning: the sent and received totals did not settle into pairs; hub-only is approximate');
+    if (!r.pairsConverged) {
+      out.push(`warning: the sent and received totals did not settle into pairs; ${r.reader === undefined ? 'hub-only is' : 'hub-only and hub+reader are'} approximate`);
+    }
   }
   if (r.rows) {
     const total = r.rows.reduce((a, x) => a + x.tokens, 0);

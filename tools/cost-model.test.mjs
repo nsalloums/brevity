@@ -131,6 +131,46 @@ test('--first start and a session\'s "first" field move the load under first-mes
   assert.equal(at({}, [{ ...s[0], first: 70 }]), 70);
 });
 
+test('hub+reader: readers write in prose, so only the hub\'s messages save', () => {
+  const r = model(star, { load: 3100, saving: 65, threshold: 15, reader: 500 });
+  const [hub, a, , , idle] = r.sessions;
+  // The hub saves on all it sends (every peer can read) and on nothing it receives (peers write prose).
+  assert.equal(hub.detail['hub+reader'].savedMessages, 12);
+  assert.equal(hub.detail['hub+reader'].loadsAt, 0);
+  // A peer saves only on what the hub sends it, and loads the card at its first received message: 80/(5+1).
+  assert.ok(Math.abs(a.detail['hub+reader'].savedMessages - 5) < 0.05);
+  close(a.detail['hub+reader'].loadsAt, 80 / 6);
+  close(a.detail['hub+reader'].cost, 500 * (1.25 + 0.1 * (80 - 80 / 6)) + 138 * (1.25 + 0.1 * 80));
+  assert.equal(idle.detail['hub+reader'].loadsAt, null);
+  close(idle.net['hub+reader'], -138 * (1.25 + 0.1 * 40));
+  // Policies without the card are unchanged.
+  assert.deepEqual(r.policies.slice(0, 4), model(star, { load: 3100, saving: 65, threshold: 15 }).policies);
+});
+
+test('hub+reader with --reader-writes and a full-size card is hub+first', () => {
+  const r = model(star, { load: 3100, saving: 65, threshold: 15, reader: 3100, readerWrites: true });
+  for (const s of r.sessions) close(s.net['hub+reader'], s.net['hub+first']);
+});
+
+test('readerMax is the card size at which hub+reader nets 0', () => {
+  // A hub that writes 150 messages to 10 readers, 15 each.
+  const team = [{ name: 'hub', turns: 2000, sent: 150, received: 0 },
+    ...Array.from({ length: 10 }, (_, i) => ({ name: `r${i}`, turns: 100, sent: 0, received: 15 }))];
+  const opts = { load: 3100, saving: 65, threshold: 100 };
+  const r = model(team, { ...opts, reader: 100 });
+  assert.ok(r.readerMax > 100);
+  const edge = model(team, { ...opts, reader: r.readerMax });
+  assert.ok(Math.abs(edge.policies.at(-1).net) < 1e-6 * r.readerNetAtZero);
+  assert.ok(model(team, { ...opts, reader: r.readerMax + 1 }).policies.at(-1).net < 0);
+  // With 12 messages from the hub, no card pays for the hub's own load.
+  const none = model(star, { load: 3100, saving: 65, threshold: 15, reader: 100 });
+  assert.equal(none.readerMax, 0);
+  assert.ok(none.readerNetAtZero < 0);
+  // When every session is a hub, no one loads the card.
+  const hubs = [{ name: 'h1', turns: 500, sent: 40, received: 40 }, { name: 'h2', turns: 500, sent: 40, received: 40 }];
+  assert.equal(model(hubs, { load: 3100, saving: 65, threshold: 10, reader: 300 }).readerMax, null);
+});
+
 // A synthetic spec with a verb table, and encodings that use some of its verbs.
 const spec = [
   '# brevity 9.9: synthetic',
@@ -216,6 +256,10 @@ test('the CLI prints the policies, the net per session and the assumptions', () 
   assert.equal(json.sessions.length, star.length);
   assert.equal(json.policies.length, 4);
   assert.ok(json.best);
+  assert.ok(!text.stdout.includes('hub+reader'), 'no reader card unless asked');
+  const reader = cli(sessions, '--saving', '65', '--load-tokens', '3100', '--threshold', '15', '--reader-tokens', '300');
+  assert.equal(reader.status, 0, reader.stderr);
+  for (const s of ['hub+reader', 'reader card: 300 tokens', 'readers write in prose']) assert.ok(reader.stdout.includes(s), `missing ${s}`);
 });
 
 test('the CLI refuses bad input', () => {
@@ -223,6 +267,7 @@ test('the CLI refuses bad input', () => {
   assert.equal(cli(file('bad.json', [{ name: 'x', turns: -1, sent: 0, received: 0 }]), '--saving', '65', '--load-tokens', '1').status, 2);
   assert.equal(cli('--saving', 'lots', '--load-tokens', '1').status, 2);
   assert.equal(cli('--saving', '65', '--load-tokens', '1', '--first', 'late').status, 2);
+  assert.equal(cli('--saving', '65', '--load-tokens', '1', '--reader-writes').status, 2, '--reader-writes needs a card');
 });
 
 test('the verb table of this checkout\'s SPEC.md parses', () => {
