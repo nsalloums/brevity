@@ -431,7 +431,7 @@ export function render(r) {
       : `every policy costs more than it saves: not loading brevity (net 0) beats the best, ${best.name} (${signed(best.net)}).`);
     if (r.reader !== undefined) {
       out.push(r.readerMax === null ? 'no session loads the reader card, so its size changes nothing.'
-        : r.readerNetAtZero > 0 ? `hub+reader stays above 0 while the reader card is under ${fmt(Math.floor(r.readerMax))} tokens.`
+        : r.readerNetAtZero > 0 ? `hub+reader stays above 0 with a reader card of up to ${fmt(Math.ceil(r.readerMax) - 1)} tokens.`
         : `no reader card makes hub+reader positive: even a card of 0 tokens nets ${signed(r.readerNetAtZero)}.`);
     }
     if (r.hubs < 2) out.push(`hub-only saves nothing with ${r.hubs ? 'one hub' : 'no hubs'}: a message saves only between two sessions that loaded the spec.`);
