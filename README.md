@@ -59,10 +59,68 @@ and revised once, after calibration.
 
 ## When it pays off
 
-The spec costs about 2.6k tokens in every session that loads it, and each message saves about 65. A session earns
-the spec back only after dozens of messages (see [the break-even section](eval/RESULTS.md#break-even)). That makes
-brevity a good fit for a **coordinator or hub session** that trades hundreds of messages with many peers, and a
-poor fit for a session that sends two. Turn it on per project, where agent traffic is heavy.
+brevity saves tokens only when the sessions that load it exchange many messages each. The spec plus a small
+dictionary is about 3,100 tokens, and every session that loads them pays for them again on each model call it
+makes, as cache reads. A message saves about 65 tokens, once in the sender's context and once in the recipient's.
+So a long session needs roughly 70 to 95 messages before the spec pays for itself (see
+[the break-even section](eval/RESULTS.md#break-even)), and a session that sends two never gets there.
+
+**Opting a project in is not enough.** A `.brevity/` folder loads the spec into every session of the project,
+busy or not, and in a hub-and-spoke team with short-lived peers that loses tokens overall. Take a synthetic team
+shaped like the evaluated one: a hub with 2,000 model calls and 268 messages, and 80 peers with 150 calls and 1 to
+14 messages each (median 2). Its net, in input-token equivalents:
+
+| how the spec loads | net for the team |
+|---|---|
+| every session, from its start (a `.brevity/` folder) | -2,672,350 |
+| each session at its first message (the skill, on demand) | -1,663,365 |
+| the hub from its start, the peers at their first message | -1,637,898 |
+| the hub from its start; the peers a 300-token card that only reads (modeled, not in brevity) | +117,603 |
+
+The hub gains about 1.18 million, but each peer loses 41,000 to 50,000, because it carries the spec on every call
+to save on a handful of messages. For this team, not using brevity beats every way brevity can load today. The
+cost model finds that a read-only reader card of about 300 to 440 tokens would keep the team ahead: up to 442
+tokens under its default assumptions, and up to 305 if each peer's first message arrives at its first call. That
+is a modeled result under the assumptions the tool prints, not a shipped feature; brevity has no reader card, and
+[issue #11](https://github.com/nsalloums/brevity/issues/11) tracks the design.
+
+Opt a project in only when every session in it will be busy, such as a coordinator and a few long-lived sessions
+that trade hundreds of messages, and check your own team with [tools/cost-model.mjs](tools/cost-model.mjs) first.
+[docs/costs.md](docs/costs.md) explains the cost model with its sources, and works through three team shapes: two
+busy sessions, a hub with short-lived peers, and an orchestrator with fan-out subagents.
+
+### Model it for your team
+
+[tools/cost-model.mjs](tools/cost-model.mjs) works this out for your own sessions. List each one with the model
+calls it makes and the messages it sends and receives, and optionally `first`, the call at which its first message
+arrives (0 for a subagent that a delegation prompt starts):
+
+```json
+[
+  { "name": "coordinator", "turns": 1500, "sent": 60, "received": 52 },
+  { "name": "api", "turns": 400, "sent": 30, "received": 34 },
+  { "name": "docs", "turns": 80, "sent": 2, "received": 6 }
+]
+```
+
+```
+node tools/cost-model.mjs sessions.json --saving 65 --reader-tokens 300
+node tools/cost-model.mjs sessions.json --messages messages.json --enc encodings.json --rows
+node tools/cost-model.mjs docs/teams/hub.json --saving 65 --load-tokens 3100 --reader-tokens 300
+```
+
+The third line reproduces the table above from [docs/teams/hub.json](docs/teams/hub.json). The tool prints the
+tokens each session and the whole team save or lose, in input-token equivalents (output 5x, cache write 1.25x and
+cache read 0.1x an input token, as in Anthropic's API pricing; `--output`, `--write` and `--read` change them),
+under four policies: every session loads the spec, only hubs load it, each session loads it at its first message,
+and hubs always with the others at their first message. `--reader-tokens N` adds a fifth: hubs load the spec, and
+the other sessions load a reader card of N tokens that only decodes, and the output gives the largest card that
+would keep the team ahead. It also prints each session's break-even message count. The spec and your `.brevity/`
+dictionaries are counted from the files unless you pass `--load-tokens`, and the assumptions, such as when messages
+arrive, who writes to whom and a warm cache, are printed with the results. `--rows` lists what each row of the
+spec's verb table costs and, with your encodings, how often your traffic uses it; rarely used rows are flagged, not
+removed. The saving per message comes from `--saving`, or from your own messages and encodings (see
+[Measure it on your own traffic](#measure-it-on-your-own-traffic)).
 
 ## Where it works
 
@@ -144,7 +202,8 @@ Copy `skills/brevity/` to `~/.agents/skills/brevity/` (Codex, Gemini CLI, Cursor
 - **The skill.** Claude reads `skills/brevity/SKILL.md` and `SPEC.md` from the plugin and, when they exist, the
   project's `.brevity/` dictionaries.
 - **The tools** in `tools/` are standalone scripts that the plugin never runs. They read only the files you pass
-  them.
+  them, except `tools/cost-model.mjs`, which also counts the tokens of the plugin's `SPEC.md` and of the nearest
+  `.brevity/DICT.md` and `.brevity/DICT.local.md`, unless you pass `--load-tokens`.
 - **Privacy.** brevity has no server and collects, stores and sends no data. What it loads goes into your Claude
   session like any other context, under your Claude plan's own data terms.
 - **Trust.** A repository's `.brevity/DICT.md` enters Claude's context the way its `CLAUDE.md` does. Read it before
@@ -223,6 +282,9 @@ write their encodings as `[{"id": "m001", "enc": "..."}]`. `measure.mjs` counts 
 `@anthropic-ai/tokenizer` if it is installed, otherwise characters / 4). `idcheck.mjs` checks, deterministically,
 that every SHA, #N, file:line, number and «quote» of each original survives in its encoding. Keep real messages
 out of version control.
+
+Other formats, research and tools for agent messages, and how brevity's approach differs from each, are listed in
+[eval/RELATED.md](eval/RELATED.md).
 
 ## Releases
 

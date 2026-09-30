@@ -1,4 +1,4 @@
-# brevity 0.3: short, public, lossless messages between agent sessions
+# brevity 0.4: short, public, lossless messages between agent sessions
 Brevity codes for coding agents: shorthand for peer messages, delegation prompts, subagent results;
 compression, not encryption. This file plus the project's DICT decode every message; no other key exists.
 ## 1. Authority
