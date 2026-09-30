@@ -23,6 +23,10 @@ claude plugin eval --eval-dir eval/cases --scaffold
 - `--scaffold` runs `opted-in-session/scaffold.sh`, which copies DICT.template.md into the run's empty workspace as
   `.brevity/DICT.md`. The script runs as you, outside the run's sandbox. Without the flag, `opted-in-session` has no
   dictionary and fails; `--tag skill` runs only the other three cases.
+- On Windows, Git's default `core.autocrlf=true` checks `scaffold.sh` out with CRLF line endings. Git Bash runs it
+  anyway, but another bash, such as WSL's, fails on the CR characters. Before you run the suite there, run
+  `git config core.autocrlf false`, delete `scaffold.sh` and check it out again, or re-save it with LF line endings
+  (see [issue #5](https://github.com/nsalloums/brevity/issues/5)).
 - Each case runs 3 times with the plugin and 3 times without it, and each `llm` grader asks a judge model 3 times per
   run. All of it counts against your plan's usage or your API bill. To check one case cheaply, add
   `--case <name> --runs 1 --ablation none`.
