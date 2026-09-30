@@ -99,12 +99,18 @@ also counted with `o200k_base` (js-tiktoken) and with characters / 4:
    quoting the decoded text, showing the fact is not in the original, or citing a MAY DROP clause. When uncertain,
    it confirms.
 6. **Fix loop.** Confirmed losses are re-encoded, blind-decoded by a new agent, re-audited and re-verified.
-7. **Repeat full passes.** Each pass starts from the previous pass's fixed encodings. Between passes the spec was
-   clarified wherever a loss came from the spec. Pass 4 ran on the spec published as 0.2 (0.3 and 0.4 kept its
-   text); pass 3 ran on the same text minus one clarifying clause. Passes 5 and 6 ran on 0.4 plus 13 clarifications
-   of points blind decoders had flagged (#9, rev. 1); rev. 2 added that `MERGEABLE` and `CLEAN` hold together and
-   when an unanswered question is due; rev. 3, which pass 9 ran on, says that a verb on a `- ` line keeps its
-   default actor.
+7. **Repeat full passes.** Each pass starts from the previous pass's fixed encodings. When a loss came from the
+   spec, the spec was clarified before a later pass, not after every pass. The text each pass ran on:
+   - passes 1-3: 0.2 revisions 1-3; pass 3's text is the published one minus one clarifying clause;
+   - pass 4: 0.2 as published (0.3 and 0.4 kept its text);
+   - passes 5 and 6: 0.4 rev. 1, which adds 13 clarifications of points blind decoders had flagged (#9);
+   - passes 7 and 8: 0.4 rev. 2, which adds that `MERGEABLE` and `CLEAN` hold together and when an unanswered
+     question is due;
+   - pass 9: 0.4 rev. 3, which adds that a verb on a `- ` line keeps its default actor.
+
+   The text now published, rev. 4, restores 0.4's `HOLD me UNTIL c` reading, which rev. 1-3 had dropped, and
+   shortens wording that no message decodes by. It was not given a full pass: the messages whose encodings use
+   HOLD were blind-decoded and audited again on it (see below the table).
 
 | pass | spec | messages | claimed losses | confirmed (messages) | cause: encoder / spec / decoder | total saving after the pass |
 |---|---|---|---|---|---|---|
@@ -124,9 +130,13 @@ hand from the skeptic's notes and re-verified in the next pass. One hand fix aft
 original did, and pass 9 caught it. The 4 left after pass 4 and the 2 left after pass 9 were blind-decoded and
 audited once more on their own; that check found 2 more in one of the pass-9 messages, fixed and re-audited clean.
 
+On rev. 4, the 22 messages whose final encodings use HOLD were blind-decoded, audited through both lenses and
+checked by the skeptic again. There were 0 claimed decision-relevant losses, and both lines in the `HOLD me UNTIL c`
+or `HOLD you UNTIL c` form decoded with the right actor. Encodings did not change, so the totals above stand.
+
 ## Break-even
 
-The spec is 2,698 tokens (Anthropic legacy tokenizer), and a small dictionary adds about 500. They sit in the
+The spec is 2,674 tokens (Anthropic legacy tokenizer), and a small dictionary adds about 500. They sit in the
 context of every session that loads them. A message saves about 60 tokens twice: in the sender's context and in
 the recipient's. On current Claude pricing, output costs 5x input and a cached context read costs 0.1x input, so
 for a session making about 200 model calls:
@@ -135,9 +145,9 @@ for a session making about 200 model calls:
 - a message the session sends saves about 60 x 5 (output) + 60 x 0.1 x 100 (carried for half the session) ≈ 900;
   one it receives saves about 675.
 
-So a session needs roughly **75-100 messages** before the spec pays for itself
-(`node tools/cost-model.mjs --saving 60 --load-tokens 3200 --turns 200` gives 76 and 101). At 0.2.0, with a
-2,641-token spec and about 65 tokens saved per message, the same sum gave 70-95. In the measured project, the
+So a session needs roughly **76-101 messages** before the spec pays for itself
+(`node tools/cost-model.mjs --saving 60 --load-tokens 3200 --turns 200`). At 0.2.0, with a 2,641-token spec and
+about 65 tokens saved per message, the same tool gives 68-91; this page said 70-95, a rounded hand estimate. In the measured project, the
 coordinating session exchanged 268 messages and paid off. The median peer session exchanged 2 and would have lost
 tokens. That is why the Claude Code plugin loads the spec only in projects that opt in with a `.brevity/` folder.
 
