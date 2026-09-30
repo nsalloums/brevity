@@ -3,6 +3,84 @@
 Every entry follows [RELEASING.md](RELEASING.md): a criticality level, why the release exists, what changed, the
 evidence, compatibility and upgrade steps. Versions follow semantic versioning read from the protocol's side.
 
+## [0.4.0] - 2026-09-30
+
+**Criticality:** high. The README said that opting a project in was enough, and for a hub-and-spoke team with
+short-lived peers that loses tokens overall.
+
+### Why
+
+- **#23, high.** The README's «When it pays off» ended with "Turn it on per project, where agent traffic is heavy".
+  A `.brevity/` folder loads the spec into every session of the project. For a synthetic team shaped like the
+  evaluated one, a hub and 80 short-lived peers, the cost model gives a net loss of about 2.67 million input-token
+  equivalents, and a loss under every way brevity can load today.
+- **#11, normal.** Nothing let users check whether brevity pays off for their own team before turning it on. This
+  release ships the tool that measures it. The underlying problem, that the spec costs more than it saves in
+  sessions that send few messages, is not fixed yet: #11 stays open for the fixes it lists (a reader card,
+  loading on first use, a shorter spec).
+- **#24, normal.** There was no public guide to the token economics of multi-agent setups.
+- **#21, low.** The repository did not say how brevity relates to other formats, research and tools.
+- **#5, low.** On Windows checkouts with CRLF line endings, `node tools/build-adapters.mjs --check` reported
+  up-to-date adapters as stale.
+
+### Changes
+
+- **README:** «When it pays off» now says that brevity saves tokens only when the sessions that load it exchange
+  many messages each, and that opting a project in is not enough. It shows the synthetic team under each loading
+  scheme, and gives the reader-card result as modeled, not shipped. «Model it for your team» documents
+  `tools/cost-model.mjs`. A new sentence links to `eval/RELATED.md`.
+- **Tools:** new `tools/cost-model.mjs`, with 21 tests in `tools/cost-model.test.mjs`. For a file listing a team's
+  sessions, it prints the net per session and for the team under four loading policies, and a fifth with
+  `--reader-tokens N`: hubs load the spec, and the other sessions a reader card of N tokens. It also prints the
+  break-even message count, and with `--rows`, what each row of the verb table costs and how often traffic uses
+  it. `tools/build-adapters.mjs` now compares and writes LF, and `scripts/release-check.mjs` reads files as LF.
+- **Docs:** new `docs/costs.md`, the cost model in plain words with a cited source for every price and ratio, and
+  three synthetic team shapes in `docs/teams/` worked through with their real output.
+- **Evaluation:** new `eval/RELATED.md`: 13 related formats, research papers and tools, and how brevity's approach
+  differs from each. It compares approaches, not numbers.
+- `SPEC.md`: the title becomes 0.4. The text is otherwise unchanged. The Cursor rule and the skill's copy of the
+  spec are regenerated from it. The hook and the skill are unchanged.
+
+### Evidence
+
+- `node --test tools/*.test.mjs`: 21 tests, 21 pass. CI now runs the tools' tests on every pull request.
+- The cost model reproduces eval/RESULTS.md's break-even: `node tools/cost-model.mjs --saving 65 --load-tokens 3100
+  --turns 200` gives 68 messages if a session sends them all and 91 if it receives them all.
+- `node tools/cost-model.mjs docs/teams/hub.json --saving 65 --load-tokens 3100 --reader-tokens 300` reproduces the
+  README's table: every session from its start -2,672,350; each at its first message -1,663,365; the hub from its
+  start and the peers at their first message -1,637,898; the hub plus a 300-token read-only card +117,603. The
+  largest card that keeps the team ahead is 442 tokens, and 305 with `--first start`.
+- Each of the 5 commands in `docs/costs.md` was run from the repository root, and its pasted output matches the real
+  output. Prices and cache multipliers were checked against the Claude API pricing page, and the statements about
+  Claude Code against its costs page, on 2026-09-30.
+- `eval/RELATED.md`: all 13 entries were checked against their primary sources on 2026-09-30, and a second reviewer
+  re-checked 3 of them.
+- #5: with `SPEC.md` and both adapters checked out as CRLF, `--check` failed with `stale:
+  adapters/cursor/brevity.mdc` before the fix, and passes after it. An LF checkout still passes, and a real change
+  to `SPEC.md` is still reported as stale.
+- `node scripts/release-check.mjs --base origin/main` and `node tools/build-adapters.mjs --check` pass. `claude
+  plugin validate .` passes for the marketplace and the plugin (local CLI 2.1.197), with one warning, about the
+  contributors' `CLAUDE.md` at the root, which the plugin does not load.
+- The spec's meaning is unchanged, so the 0.2.0 measurement stands: 27.2% fewer tokens with no known
+  decision-relevant loss.
+
+### Compatibility
+
+- Protocol: every message written under 0.3 decodes the same under 0.4. The spec's size is unchanged: only the
+  version in its title changed.
+- The plugin folder gains `docs/` (4 files, about 32 KB), `tools/cost-model.mjs` with its test, and
+  `eval/RELATED.md`. None of them loads into a session, so what a session pays does not change.
+
+### Upgrade
+
+- Claude Code: `/plugin marketplace update brevity`. Nothing changes at runtime.
+- Projects that opted in with a `.brevity/` folder: list the project's sessions and run `tools/cost-model.mjs` on
+  them, as the README's «Model it for your team» describes. If the team loses tokens, keep the folder only where
+  every session is busy, or remove it.
+- Cursor: copy the regenerated `adapters/cursor/brevity.mdc` (only its title line changed).
+- Agent Skill: copy `skills/brevity/` (only the spec's title line changed).
+- AGENTS.md readers and Gemini CLI: nothing changes but the version.
+
 ## [0.3.0] - 2026-09-29
 
 **Criticality:** high. A review against the Claude plugin directory's pre-submission checklist and Software
