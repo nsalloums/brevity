@@ -22,7 +22,7 @@ compression, not encryption. This file plus the project's DICT decode every mess
   verb, subject and condition. A `- ` line continues the line above and stays inside its IF, HOLD or WHEN; its own
   verb has its default actor; what holds regardless starts a new line. `1.` `2.` lines are ordered steps. `> text` =
   free prose in any language, the escape hatch when slots lose nuance; its requests and qualifiers count as written.
-- Default actor: sender for claims, WILL, DONE, ASK; recipient for DO, NO, REPLY. IF and THEN name any other.
+- Default actor: sender for claims, WILL, DONE, ASK; recipient for DO, NO, REPLY. HOLD, IF and THEN name any other.
 - Keywords and content in terse English, whatever the source language; quotes stay verbatim. Digits, not number
   words, outside quotes; a number carries its unit (`55 deploys`).
 ## 3. Verbs
@@ -33,7 +33,7 @@ compression, not encryption. This file plus the project's DICT decode every mess
 | `ASK x?` / `A1 x` | a question to the recipient, kept a question (`ASK I x?` = may I; `ASK1`, `ASK2`) / answer to question 1, answer first |
 | `WILL x [WHEN c]` / `DONE x` | the sender's commitment (`WILL NOT x [UNTIL c]` abstains) / completed act; `@who WILL x` for another's |
 | `IF c THEN x ELSE y` | x only when c, y otherwise (ELSE optional); `x UNLESS c` |
-| `HOLD x UNTIL c` | whoever does x waits for c |
+| `HOLD x UNTIL c` | x (or whoever does act x) waits for c |
 | `GO x` | go-ahead on exactly x (coordination only) |
 | `DEC x by=who date` | a decision and its author: owner, coord, @id, me+you. No `by=` = the sender decided |
 | `FIX old -> new` | corrects an earlier value or statement, named or quoted, and whose it was if known; `-> WITHDRAWN` retracts it |
@@ -70,15 +70,15 @@ compression, not encryption. This file plus the project's DICT decode every mess
 ## 5. Encoding
 KEEP, with polarity, condition, actor, author and order intact:
 - identifiers: SHAs, #N, branches, paths, file:line, run and job ids, check names, commands the reader must run, and
-  code names that say what is touched, changed, asked about or to be checked;
+  code names that say what is touched, asked about or checked;
 - every number with its unit, dates, times; statuses; findings and verification outcomes (on which commit, result);
 - owners and actors; who decided; order; conditions (if, unless, until, when) and waits;
 - requests, prohibitions, questions, answers, commitments, go-aheads, holds, corrections (old -> new),
   report-back requests, relays; warnings; verbatim quotes; qualifiers and uncertainty (only, not yet, may, ~).
-MAY DROP: greetings, thanks, apologies, sign-offs; sender identity and role framing (the transport names the
-sender); read-backs of the recipient's own request (ACK); DICT rules restated (cite `R.x`); background and rationale
-that change nothing the reader does or writes; how a finding was reached (evidence chain, tools, environment),
-unless the message is about the method, disputes a finding or asks for a re-check. Numbers stay.
+MAY DROP: greetings, thanks, apologies, sign-offs; sender identity and role framing; read-backs of the recipient's
+own request (ACK); DICT rules restated (cite `R.x`); background and rationale that change nothing the reader does
+or writes; how a finding was reached (evidence chain, tools), unless the message is about the method, disputes a
+finding or asks for a re-check. Numbers stay.
 Test: if the reader could act, write, wait or answer differently without it, keep it. In doubt, keep it.
 COMPRESS: telegraph: no articles, auxiliaries, filler or connectives; `->`, `=`, `:`, `;`. A dropped pronoun that
 names an actor or object becomes its referent (@id, path). Cite `R.x` only where the source says every step of the
@@ -88,14 +88,14 @@ the identifiers the reader needs. Quote only what must stay verbatim; a find/rep
 - Decode each message alone from this spec and your DICT. Expand every alias and every `R.x` in full: actors named
   in a rule stand, its other steps fall to the line's actor. Stated values stand, even where the DICT now differs.
   An unknown token is content (a code or work name): keep it, flag it, never guess.
-- DICT.md, one per project, loaded by every session: `alias = expansion` lines (prefixes, files, zones, people,
-  roles, checks, commands, layouts) and rules `R.name` (fixed text, dated when time-bound,
-  never citing another rule). Never redefine an alias; a changed rule gets a new name.
+- DICT.md, one per project, loaded by every session: `alias = expansion` lines and rules `R.name` (fixed text,
+  dated when time-bound, never citing another rule). Never redefine an alias; a changed rule gets a new name.
 ## 7. Example (synthetic): request, then reply after `~~~`
 ```
 #412 must take changelog entry 13, not 12, and needs the base merged in before the owner can merge it.
 FIX entry 12 -> 13 (mine) by=coord; WHY #409 recorded late
-DO merge base into fix/login-copy; NO edits to «## Unreleased»
+DO merge base into fix/login-copy
+NO edits to «## Unreleased»
 IF you land after #415 THEN HDR count 7 -> 9 ELSE #415's session sums
 REPLY head WHEN ci=green CLEAN
 ~~~
