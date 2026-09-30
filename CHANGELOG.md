@@ -14,6 +14,10 @@ Changes waiting on `next` for the next release (see [RELEASING.md](RELEASING.md)
   - Write mode leaves the files alone.
   - An LF checkout still passes, and a real change to `SPEC.md` is still reported as stale.
   - `scripts/release-check.mjs` also reads files as LF, so sizes and comparisons match what git stores.
+- **#11, normal.** New `tools/cost-model.mjs` shows whether the spec saves tokens for a team, and where to load it:
+  the net per session and for the team under four loading policies, the break-even message count, and, with
+  `--rows`, each verb-table row's cost and use. It reproduces eval/RESULTS.md's break-even (68 to 91 messages at
+  3,100 tokens and 200 calls); tests: `node tools/cost-model.test.mjs`.
 
 ## [0.3.0] - 2026-09-29
 
