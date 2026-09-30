@@ -7,6 +7,29 @@ evidence, compatibility and upgrade steps. Versions follow semantic versioning r
 
 Changes waiting on `next` for the next release (see [RELEASING.md](RELEASING.md)).
 
+- **#9, normal.** `SPEC.md` now gives one reading to the points that blind decoders and a fresh-session pilot
+  found unclear: who waits in a HOLD (whoever does x), what "lands" means, when a REPLY without WHEN or an
+  unanswered question is due (once known), `WILL NOT x UNTIL c`, which tree a line number refers to, `n+` numbers
+  not fixed ahead, a body that restates line 1, `has=#N`, a FIX that does not say whose, `…` in a list, `@Name` for
+  a person, `Closes #N` as an issue, `MERGEABLE` next to `CLEAN`, and the actor of a verb on a `- ` line.
+  Evidence (#10, five more full blind passes over the 268 private messages, method in eval/RESULTS.md):
+  - First-pass confirmed decision-relevant losses per pass: 29 in pass 4, then 9, 19, 13, 12 and 13 in passes 5-9.
+    Of those 66, 58 were encoder errors, 5 decoder errors and 3 came from the spec, each clarified here. All were
+    fixed and re-audited, so none is known; #10 stays open because no pass came back clean.
+  - Tokens, all 268 messages: 63,861 -> 46,521 (27.2%, median 152) at 0.2.0, and 63,861 -> 47,776 (25.2%, median
+    160.5) now. The 2 points are the facts passes 5-9 restored (1,255 tokens), not the spec change: the
+    clarifications change no encoding.
+  - `tools/idcheck.mjs`: 2,637 identifiers, 0 missing. The spec: 2,641 -> 2,698 tokens (+2.2%), 99 lines, 9,163 ->
+    9,299 characters, still one hook part.
+  - Compatibility: every item adds a form 0.4 did not define (`@Name`, `has=#N`, `WILL NOT x UNTIL c`), gives a
+    reading where 0.4 gave none (a REPLY without WHEN, a HOLD that names nobody, a FIX without whose, a line number
+    with no tree, a body that restates line 1), or defines a term 0.4 used (lands, `n+`, `…`, `MERGEABLE`, a `- `
+    line's actor), so a 0.4 message reads the same. One exception, stated plainly: a 0.4 decoder applying "bare #N
+    = pull request" literally reads an unquoted `Closes #N` as a pull request, and now it reads as an issue, which
+    is what GitHub's closing keyword closes. No blind decoder in passes 2-9 read a `Closes #N` target as a pull
+    request.
+  - Break-even, from these numbers: about 75-100 messages per session (0.2.0: 70-95); see eval/RESULTS.md.
+
 ## [0.4.0] - 2026-09-30
 
 **Criticality:** high. The README said that opting a project in was enough, and for a hub-and-spoke team with
