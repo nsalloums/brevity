@@ -19,6 +19,8 @@ Changes waiting on `next` for the next release (see [RELEASING.md](RELEASING.md)
   `--rows`, each verb-table row's cost and use. `--reader-tokens N` models hubs with the full spec and a reader
   card of N tokens elsewhere (#23). It reproduces eval/RESULTS.md's break-even (68 to 91 messages at
   3,100 tokens and 200 calls); tests: `node tools/cost-model.test.mjs`.
+- **#21, low.** The README links to the new `eval/RELATED.md`, which lists related formats, research and tools
+  for agent messages, each checked against its primary source, and how brevity's approach differs from each.
 
 ## [0.3.0] - 2026-09-29
 

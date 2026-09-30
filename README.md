@@ -255,6 +255,9 @@ write their encodings as `[{"id": "m001", "enc": "..."}]`. `measure.mjs` counts 
 that every SHA, #N, file:line, number and «quote» of each original survives in its encoding. Keep real messages
 out of version control.
 
+Other formats, research and tools for agent messages, and how brevity's approach differs from each, are listed in
+[eval/RELATED.md](eval/RELATED.md).
+
 ## Releases
 
 Each release states its criticality, why it exists and the evidence behind it: see [CHANGELOG.md](CHANGELOG.md)
