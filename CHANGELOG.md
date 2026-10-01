@@ -41,6 +41,11 @@ Changes waiting on `next` for the next release (see [RELEASING.md](RELEASING.md)
     - Exception 2: an unquoted `@media` or `@scope/pkg` was unknown content under 0.4 and could now read as a
       `@Name`. Code belongs in backticks: 4 final encodings left it unquoted (an encoder error), and none of their
       24 decodings in passes 4-9 read it as a name.
+- **#35, normal.** On a checkout with CRLF line endings, Git's default on Windows, the SessionStart hook counted
+  each CR toward its 9,300-character part limit and printed it into the session. It now reads every file with LF
+  line endings, so a CRLF checkout injects the same text as an LF one. Evidence: a 9,299-character spec (a draft
+  of #34) with CRLF took 2 hook parts (9,299 and 178 characters) and now takes 1, identical to the LF result
+  (9,325 characters); the LF output is unchanged.
 - **#32, normal.** The README, `docs/costs.md` and the cost-model test now quote eval/RESULTS.md's figures after #9:
   25% fewer tokens (63,861 -> 47,776, median 201 -> 160.5), 60 tokens saved per message, 3,200 loaded per session,
   and 76-101 messages to break even at 200 calls. Every output in `docs/costs.md` was re-run with `--saving 60
