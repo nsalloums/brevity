@@ -36,7 +36,7 @@ function nearest(rel, starts) {
 }
 
 const starts = [input.cwd, process.env.CLAUDE_PROJECT_DIR, process.cwd()].filter(Boolean);
-// Opt-in per project: the spec costs ~2.6k tokens in every session that loads it, which only pays
+// Opt-in per project: the spec costs ~2.7k tokens in every session that loads it, which only pays
 // off where sessions exchange many messages. Inject only when the project has a `.brevity/` folder
 // (it may be empty) or BREVITY_ALWAYS=1 is set.
 if (!nearest('.brevity', starts) && process.env.BREVITY_ALWAYS !== '1') process.exit(0);
@@ -44,13 +44,15 @@ const files = [join(root, 'SPEC.md'), ...['.brevity/DICT.md', '.brevity/DICT.loc
 for (const extra of (process.env.BREVITY_DICT || '').split(delimiter)) if (extra) files.push(resolve(extra));
 
 // One chunk per file, split at line boundaries when a file is longer than LIMIT.
+// Git stores these files with LF, but a Windows checkout with core.autocrlf=true has CRLF. Read LF only, so the
+// line endings of a checkout never change what the hook counts or prints.
 const chunks = [];
 const seen = new Set();
 for (const file of files) {
   if (!file || seen.has(file) || !existsSync(file)) continue;
   seen.add(file);
   const pieces = [''];
-  for (const line of readFileSync(file, 'utf8').split('\n')) {
+  for (const line of readFileSync(file, 'utf8').replace(/\r\n/g, '\n').split('\n')) {
     if (pieces.at(-1).length + line.length + 1 > LIMIT - 200 && pieces.at(-1)) pieces.push('');
     pieces[pieces.length - 1] += `${line}\n`;
   }

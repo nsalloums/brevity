@@ -1,6 +1,6 @@
 # Decision-relevance rubric
 
-This rubric decides which facts a brevity encoding must keep. The same text sits, shorter, in section 6 of
+This rubric decides which facts a brevity encoding must keep. The same text sits, shorter, in section 5 of
 [SPEC.md](../SPEC.md). It was written before the measurement run, and every audit prompt in that run quotes it in
 full, so a "zero loss" result means zero loss **under this rubric**, which you can read and disagree with.
 
