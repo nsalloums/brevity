@@ -41,6 +41,11 @@ Changes waiting on `next` for the next release (see [RELEASING.md](RELEASING.md)
     - Exception 2: an unquoted `@media` or `@scope/pkg` was unknown content under 0.4 and could now read as a
       `@Name`. Code belongs in backticks: 4 final encodings left it unquoted (an encoder error), and none of their
       24 decodings in passes 4-9 read it as a name.
+- **#32, normal.** The README, `docs/costs.md` and the cost-model test now quote eval/RESULTS.md's figures after #9:
+  25% fewer tokens (63,861 -> 47,776, median 201 -> 160.5), 60 tokens saved per message, 3,200 loaded per session,
+  and 76-101 messages to break even at 200 calls. Every output in `docs/costs.md` was re-run with `--saving 60
+  --load-tokens 3200`. For the hub with 80 peers, a read-only reader card now keeps the team ahead up to 309
+  tokens, not 442, and the 300-token card the README models nets +7,618, not +117,603.
 
 ## [0.4.0] - 2026-09-30
 

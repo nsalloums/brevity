@@ -36,12 +36,12 @@ identifier, number, owner, condition, request and prohibition, and drops the fra
 Measured on 268 real messages between Claude Code sessions (229 plus a 39-message holdout written after the
 spec), with blind decoding and two independent audits per pass:
 
-- **27% fewer tokens** in total (63,861 -> 46,521; median per message 201 -> 152), with no known
+- **25% fewer tokens** in total (63,861 -> 47,776; median per message 201 -> 160.5), with no known
   decision-relevant loss and every SHA, #N, file:line, number and quote kept (2,637 identifiers, 0 missing).
 - **Not 50%.** Pushing harder dropped decision-relevant facts; about 28% of the text is identifiers, quotes and
   code that must stay as written.
-- **Worth it in busy sessions only.** The spec costs about 2.6k tokens per session, and a message saves about 65,
-  so a session needs roughly 70-95 messages to come out ahead: a coordinator, not a peer that sends two.
+- **Worth it in busy sessions only.** The spec costs about 2.7k tokens per session, and a message saves about 60,
+  so a session needs roughly 76-101 messages to come out ahead: a coordinator, not a peer that sends two.
 
 The full method, the numbers per tokenizer and the break-even analysis are in [eval/RESULTS.md](eval/RESULTS.md).
 What counts as "decision-relevant" is defined in [eval/RUBRIC.md](eval/RUBRIC.md), written before the measurement
@@ -60,9 +60,9 @@ and revised once, after calibration.
 ## When it pays off
 
 brevity saves tokens only when the sessions that load it exchange many messages each. The spec plus a small
-dictionary is about 3,100 tokens, and every session that loads them pays for them again on each model call it
-makes, as cache reads. A message saves about 65 tokens, once in the sender's context and once in the recipient's.
-So a long session needs roughly 70 to 95 messages before the spec pays for itself (see
+dictionary is about 3,200 tokens, and every session that loads them pays for them again on each model call it
+makes, as cache reads. A message saves about 60 tokens, once in the sender's context and once in the recipient's.
+So a long session needs roughly 76 to 101 messages before the spec pays for itself (see
 [the break-even section](eval/RESULTS.md#break-even)), and a session that sends two never gets there.
 
 **Opting a project in is not enough.** A `.brevity/` folder loads the spec into every session of the project,
@@ -72,17 +72,18 @@ shaped like the evaluated one: a hub with 2,000 model calls and 268 messages, an
 
 | how the spec loads | net for the team |
 |---|---|
-| every session, from its start (a `.brevity/` folder) | -2,672,350 |
-| each session at its first message (the skill, on demand) | -1,663,365 |
-| the hub from its start, the peers at their first message | -1,637,898 |
-| the hub from its start; the peers a 300-token card that only reads (modeled, not in brevity) | +117,603 |
+| every session, from its start (a `.brevity/` folder) | -2,974,900 |
+| each session at its first message (the skill, on demand) | -1,926,684 |
+| the hub from its start, the peers at their first message | -1,901,291 |
+| the hub from its start; the peers a 300-token card that only reads (modeled, not in brevity) | +7,618 |
 
-The hub gains about 1.18 million, but each peer loses 41,000 to 50,000, because it carries the spec on every call
+The hub gains about 1.02 million, but each peer loses 43,000 to 51,000, because it carries the spec on every call
 to save on a handful of messages. For this team, not using brevity beats every way brevity can load today. The
-cost model finds that a read-only reader card of about 300 to 440 tokens would keep the team ahead: up to 442
-tokens under its default assumptions, and up to 305 if each peer's first message arrives at its first call. That
-is a modeled result under the assumptions the tool prints, not a shipped feature; brevity has no reader card, and
-[issue #11](https://github.com/nsalloums/brevity/issues/11) tracks the design.
+cost model finds that a read-only reader card of about 220 to 310 tokens would keep the team ahead: up to 309
+tokens under its default assumptions, and up to 218 if each peer's first message arrives at its first call. The
+300-token card in the table is near that limit: if each peer's first message arrives at its first call, it loses
+tokens too. That is a modeled result under the assumptions the tool prints, not a shipped feature; brevity has no
+reader card, and [issue #11](https://github.com/nsalloums/brevity/issues/11) tracks the design.
 
 Opt a project in only when every session in it will be busy, such as a coordinator and a few long-lived sessions
 that trade hundreds of messages, and check your own team with [tools/cost-model.mjs](tools/cost-model.mjs) first.
@@ -104,9 +105,9 @@ arrives (0 for a subagent that a delegation prompt starts):
 ```
 
 ```
-node tools/cost-model.mjs sessions.json --saving 65 --reader-tokens 300
+node tools/cost-model.mjs sessions.json --saving 60 --reader-tokens 300
 node tools/cost-model.mjs sessions.json --messages messages.json --enc encodings.json --rows
-node tools/cost-model.mjs docs/teams/hub.json --saving 65 --load-tokens 3100 --reader-tokens 300
+node tools/cost-model.mjs docs/teams/hub.json --saving 60 --load-tokens 3200 --reader-tokens 300
 ```
 
 The third line reproduces the table above from [docs/teams/hub.json](docs/teams/hub.json). The tool prints the

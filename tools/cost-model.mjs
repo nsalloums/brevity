@@ -342,7 +342,7 @@ export async function run(argv, { cwd = process.cwd() } = {}) {
 
   const sessions = o.sessionsFile ? readSessions(o.sessionsFile) : null;
   if (!saving && (sessions || !o.rows)) {
-    throw new Error('give the saving per message: --saving N (eval/RESULTS.md measured 65), or --messages and --enc');
+    throw new Error('give the saving per message: --saving N (eval/RESULTS.md measured 60), or --messages and --enc');
   }
   const turns = o.turns ?? (sessions?.length ? median(sessions.map((s) => s.turns)) : 200);
   const result = { tokenizer: tok.name, prices, load, saving, turns };
