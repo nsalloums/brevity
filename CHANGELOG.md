@@ -3,54 +3,107 @@
 Every entry follows [RELEASING.md](RELEASING.md): a criticality level, why the release exists, what changed, the
 evidence, compatibility and upgrade steps. Versions follow semantic versioning read from the protocol's side.
 
-## [Unreleased]
+## [0.5.0] - 2026-09-30
 
-Changes waiting on `next` for the next release (see [RELEASING.md](RELEASING.md)).
+**Criticality:** normal. Blind decoders kept flagging the same spec points, and three confirmed losses came from
+the spec's own wording. The re-measurement also replaced the published savings.
 
-- **#9, normal.** `SPEC.md` now gives one reading to the points that blind decoders and a fresh-session pilot
-  found unclear: who waits in a HOLD on an act (whoever does it), what "lands" means, when a REPLY without WHEN or
-  an unanswered question is due (once known), `WILL NOT x UNTIL c`, which tree a line number refers to, `n+`
-  numbers not fixed ahead, a body that restates line 1, `has=#N`, a FIX that does not say whose, `…` in a list,
-  `@Name` for a person, `Closes #N` as an issue, `MERGEABLE` next to `CLEAN`, and the actor of a verb on a `- `
-  line. The spec's example no longer puts a NO on a DO line.
-  Evidence (#10, five more full blind passes over the 268 private messages, method in eval/RESULTS.md):
-  - First-pass confirmed decision-relevant losses per pass: 29 in pass 4, then 9, 19, 13, 12 and 13 in passes 5-9.
-    Of those 66, 58 were encoder errors, 5 decoder errors and 3 came from the spec, each clarified here. All were
-    fixed and re-audited, so none is known; #10 stays open because no pass came back clean.
-  - Tokens, all 268 messages: 63,861 -> 46,521 (27.2%, median 152) at 0.2.0, and 63,861 -> 47,776 (25.2%, median
-    160.5) now. The 2 points are the facts passes 5-9 restored (1,255 tokens), not the spec change: the
-    clarifications change no encoding.
-  - `tools/idcheck.mjs`: 2,637 identifiers, 0 missing. The spec: 2,641 -> 2,674 tokens (+1.2%), 99 lines, 9,163 ->
-    9,185 characters (9,284 with CRLF line endings), one hook part either way.
-  - Break-even with `tools/cost-model.mjs` and 200 calls: 76-101 messages per session (`--saving 60 --load-tokens
-    3200`). 0.2.0's inputs give 68-91 with the same tool; eval/RESULTS.md said 70-95, a rounded hand estimate.
-  - Compatibility: a message written under 0.4 reads the same, with two exceptions.
-    - Added forms 0.4 did not define: `@Name`, `has=#N`, `WILL NOT x UNTIL c`.
-    - A due time where 0.4 gave none: a REPLY without WHEN, and a question with no REPLY.
-    - A reading where 0.4 gave none: a HOLD on an act (`HOLD me UNTIL c` still reads as in 0.4), a FIX without
-      whose, a line number with no tree.
-    - Terms 0.4 used without defining: lands, `n+`, `…`, `MERGEABLE`.
-    - A 0.4 ambiguity settled: a verb on a `- ` line takes its own default actor, not the parent line's; one
-      decoder reading the 0.4 wording took the parent's.
-    - A reading 0.4 implied, replaced: a body line that restates line 1 adds detail to it, where 0.4's «the body
-      does not repeat it» implied a new statement. No such case is known.
-    - Exception 1: a 0.4 decoder applying "bare #N = pull request" literally reads an unquoted `Closes #N` as a
-      pull request, and now it reads as an issue, which is what GitHub's closing keyword closes. 7 of the 268
-      encodings carry it (4 in backticks, 3 unquoted); no blind decoder in passes 2-9 read its target as a pull
-      request.
-    - Exception 2: an unquoted `@media` or `@scope/pkg` was unknown content under 0.4 and could now read as a
-      `@Name`. Code belongs in backticks: 4 final encodings left it unquoted (an encoder error), and none of their
-      24 decodings in passes 4-9 read it as a name.
-- **#35, normal.** On a checkout with CRLF line endings, Git's default on Windows, the SessionStart hook counted
-  each CR toward its 9,300-character part limit and printed it into the session. It now reads every file with LF
-  line endings, so a CRLF checkout injects the same text as an LF one. Evidence: a 9,299-character spec (a draft
-  of #34) with CRLF took 2 hook parts (9,299 and 178 characters) and now takes 1, identical to the LF result
-  (9,325 characters); the LF output is unchanged.
-- **#32, normal.** The README, `docs/costs.md` and the cost-model test now quote eval/RESULTS.md's figures after #9:
-  25% fewer tokens (63,861 -> 47,776, median 201 -> 160.5), 60 tokens saved per message, 3,200 loaded per session,
-  and 76-101 messages to break even at 200 calls. Every output in `docs/costs.md` was re-run with `--saving 60
-  --load-tokens 3200`. For the hub with 80 peers, a read-only reader card now keeps the team ahead up to 309
-  tokens, not 442, and the 300-token card the README models nets +7,618, not +117,603.
+### Why
+
+- **#9, normal.** Blind decoders and a fresh-session pilot found spec points they could not decode with certainty.
+  In evaluation passes 5-9, 3 of the 66 confirmed decision-relevant losses came from the spec's wording. In one,
+  a `- DO` line under a WILL line was read as the sender's act, because the spec did not say which actor a verb
+  on a continuation line takes.
+- **#35, normal.** On checkouts with CRLF line endings, Git's default on Windows, the SessionStart hook counted
+  each CR toward its 9,300-character part limit and printed it into the session. With the clarified spec, such a
+  checkout would have loaded the spec in 2 parts.
+- **#32, normal.** The README, `docs/costs.md` and the cost-model test quoted the 0.2.0 measurement, which the
+  re-measurement for #9 replaces.
+- #10 stays open: no full blind pass has come back clean (see Evidence).
+
+### Changes
+
+- **`SPEC.md` 0.5** gives one reading to each flagged point:
+  - who waits in a HOLD on an act: whoever does it;
+  - what "lands" means;
+  - when a REPLY without WHEN, or a question with no REPLY, is due: once known;
+  - `WILL NOT x UNTIL c`;
+  - which tree a line number refers to;
+  - `n+` numbers not fixed ahead;
+  - a body line that restates line 1;
+  - `has=#N`;
+  - a FIX that does not say whose;
+  - `…` in a list;
+  - `@Name` for anyone named;
+  - `Closes #N` as an issue;
+  - `MERGEABLE` next to `CLEAN`;
+  - the actor of a verb on a `- ` line.
+
+  The example puts NO on its own line. The spec has 99 lines and 9,185 characters. The Cursor rule and the
+  skill's copy of the spec are regenerated from it.
+- **Claude Code plugin:** the hook reads every file with LF line endings (#35).
+- **README and `docs/costs.md`:** the figures now come from eval/RESULTS.md after #9, and every command output is
+  re-run (#32). The README's caveat on the modeled 300-token reader card names both cases in which it loses, as
+  `docs/costs.md` does: each peer's first message arriving at its first call, and 1-hour cache writes.
+- **Evaluation:** eval/RESULTS.md records passes 5-9, the spec revision each pass used, and the 0.2.0 and current
+  numbers side by side. eval/RUBRIC.md points to the right spec section.
+- **Tools:** the cost-model test asserts the new break-even, and one error message cites the new saving.
+
+### Evidence
+
+- Passes 5-9 are five more full blind passes over the 268 private messages, with the method in
+  [eval/RESULTS.md](eval/RESULTS.md).
+  - First-pass confirmed decision-relevant losses: 29 in pass 4, then 9, 19, 13, 12 and 13.
+  - Of the 66 in passes 5-9, 58 were encoder errors, 5 decoder errors and 3 came from the spec, each clarified
+    here.
+  - All were fixed and re-audited, so none is known.
+  - A targeted re-check of the 22 messages that use HOLD, on the final text, found none.
+- Tokens, all 268 messages, Anthropic legacy tokenizer: 63,861 -> 47,776 (25.2%), median 201 -> 160.5. 0.2.0
+  measured 63,861 -> 46,521 (27.2%), median 152. The 2 points are facts that passes 5-9 restored (1,255 tokens),
+  not the spec change: the clarifications change no encoding.
+- `tools/idcheck.mjs`: 2,637 identifiers, 0 missing.
+- Break-even at 200 calls, with `node tools/cost-model.mjs --saving 60 --load-tokens 3200 --turns 200`: 76-101
+  messages per session. With 0.2.0's inputs the same tool gives 68-91, which this repository rounded to 70-95.
+- Hook: the four `hooks.json` commands were run the way Claude Code runs them, on a CRLF copy of the plugin.
+  - Before the fix, the spec was injected as 9,310 characters with 99 CR.
+  - After it, as 9,211 characters with no CR, identical to an LF copy. The dictionary went from 15 CR to none.
+  - A folder without `.brevity/` gets no output.
+- Each output pasted in `docs/costs.md` and the README was re-run and matches line by line.
+- Independent reviewers, each with a skeptic, checked #34 twice and #37 once against the files and the tool.
+- `claude plugin validate .` passes, as do `node scripts/release-check.mjs --base origin/main`,
+  `node tools/build-adapters.mjs --check` and the tools' 21 tests.
+
+### Compatibility
+
+- Protocol: a message written under 0.4 reads the same, with two exceptions.
+  - Exception 1: a 0.4 decoder applying "bare #N = pull request" literally reads an unquoted `Closes #N` as a pull
+    request. Under 0.5 it reads as an issue, which is what GitHub's closing keyword closes. 7 of the 268 encodings
+    carry it, 4 in backticks and 3 unquoted. No blind decoder in passes 2-9 read its target as a pull request.
+  - Exception 2: an unquoted `@media` or `@scope/pkg` was unknown content under 0.4, and could now read as a
+    `@Name`. Code belongs in backticks: 4 encodings left such a token unquoted, an encoder error, and none of
+    their 24 decodings read it as a name.
+- Everything else adds a reading where 0.4 had none, or settles an ambiguity:
+  - added forms: `@Name`, `has=#N` and `WILL NOT x UNTIL c`;
+  - due times for REPLY and ASK;
+  - a HOLD on an act, where `HOLD me UNTIL c` still reads as in 0.4;
+  - definitions for "lands", `n+`, `…` and `MERGEABLE`;
+  - the actor of a verb on a `- ` line, its own default actor;
+  - a body line that restates line 1, which adds detail. No such case is known.
+- The spec grows from 2,641 to 2,674 tokens (+1.2%) and still fits in one hook part with LF or CRLF line endings.
+  The measured saving falls 2 points, to 25.2%, for the reason given under Evidence. RELEASING.md's gate allows a
+  drop of more than 1 point when the entry explains it.
+
+### Upgrade
+
+- Claude Code: `/plugin marketplace update brevity`.
+- Writers of brevity: put code tokens that start with `@` in backticks, and write `issue #N` (or `Closes #N`) for
+  issues.
+- Teams using the cost model: re-run it with `--saving 60 --load-tokens 3200`, or with your own measurement.
+- Cursor: copy the regenerated `adapters/cursor/brevity.mdc`.
+- Agent Skill: copy `skills/brevity/`.
+- AGENTS.md readers: re-run `node tools/agents-md.mjs <AGENTS.md>` from a checkout of v0.5.0, since the spec text
+  changed.
+- Gemini CLI: `gemini extensions update brevity`.
 
 ## [0.4.0] - 2026-09-30
 

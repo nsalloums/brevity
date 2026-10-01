@@ -81,8 +81,8 @@ The hub gains about 1.02 million, but each peer loses 43,000 to 51,000, because 
 to save on a handful of messages. For this team, not using brevity beats every way brevity can load today. The
 cost model finds that a read-only reader card of about 220 to 310 tokens would keep the team ahead: up to 309
 tokens under its default assumptions, and up to 218 if each peer's first message arrives at its first call. The
-300-token card in the table is near that limit: if each peer's first message arrives at its first call, it loses
-tokens too. That is a modeled result under the assumptions the tool prints, not a shipped feature; brevity has no
+300-token card in the table is near that limit: if each peer's first message arrives at its first call, or with
+1-hour cache writes, it loses tokens too. That is a modeled result under the assumptions the tool prints, not a shipped feature; brevity has no
 reader card, and [issue #11](https://github.com/nsalloums/brevity/issues/11) tracks the design.
 
 Opt a project in only when every session in it will be busy, such as a coordinator and a few long-lived sessions

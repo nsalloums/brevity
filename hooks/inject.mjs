@@ -36,7 +36,7 @@ function nearest(rel, starts) {
 }
 
 const starts = [input.cwd, process.env.CLAUDE_PROJECT_DIR, process.cwd()].filter(Boolean);
-// Opt-in per project: the spec costs ~2.6k tokens in every session that loads it, which only pays
+// Opt-in per project: the spec costs ~2.7k tokens in every session that loads it, which only pays
 // off where sessions exchange many messages. Inject only when the project has a `.brevity/` folder
 // (it may be empty) or BREVITY_ALWAYS=1 is set.
 if (!nearest('.brevity', starts) && process.env.BREVITY_ALWAYS !== '1') process.exit(0);
