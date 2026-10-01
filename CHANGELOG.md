@@ -68,6 +68,11 @@ the spec's own wording. The re-measurement also replaced the published savings.
   - Before the fix, the spec was injected as 9,310 characters with 99 CR.
   - After it, as 9,211 characters with no CR, identical to an LF copy. The dictionary went from 15 CR to none.
   - A folder without `.brevity/` gets no output.
+- A real `claude -p --plugin-dir` run, with a signed-in CLI and the release commit as the plugin:
+  - In a folder with `.brevity/`, the context holds `<!-- brevity SPEC.md -->` followed by
+    «# brevity 0.5: short, public, lossless messages between agent sessions», in one part, and the local
+    dictionary.
+  - In a folder without `.brevity/`, there is no brevity comment, and the skill `brevity:brevity` is available.
 - Each output pasted in `docs/costs.md` and the README was re-run and matches line by line.
 - Independent reviewers, each with a skeptic, checked #34 twice and #37 once against the files and the tool.
 - `claude plugin validate .` passes, as do `node scripts/release-check.mjs --base origin/main`,
