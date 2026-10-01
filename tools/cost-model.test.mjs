@@ -16,14 +16,14 @@ const file = (name, data) => { const f = join(dir, name); writeFileSync(f, typeo
 const close = (a, b, eps = 1e-6) => assert.ok(Math.abs(a - b) <= eps * Math.max(1, Math.abs(b)), `${a} != ${b}`);
 const cli = (...args) => spawnSync(process.execPath, [tool, ...args], { encoding: 'utf8', cwd: dir });
 
-test('reproduces the break-even in eval/RESULTS.md: ~3,100 tokens and 200 calls need 70 to 95 messages', () => {
-  const at = (sentShare) => breakEven({ load: 3100, saving: 65, turns: 200, sentShare });
-  // The spec costs 3,100 x (1.25 + 0.1 x 200) = 65,875; a sent message saves 65 x (5 + 0.1 x 100) = 975,
-  // a received one 65 x (1.25 + 0.1 x 100) = 731.
-  assert.equal(at(1), Math.ceil(65875 / 975));
-  assert.equal(at(0), Math.ceil(65875 / 731.25));
-  assert.ok(at(1) >= 65 && at(1) <= 75, `all sent: ${at(1)}`);
-  assert.ok(at(0) >= 85 && at(0) <= 95, `all received: ${at(0)}`);
+test('reproduces the break-even in eval/RESULTS.md: ~3,200 tokens and 200 calls need 76 to 101 messages', () => {
+  const at = (sentShare) => breakEven({ load: 3200, saving: 60, turns: 200, sentShare });
+  // The spec costs 3,200 x (1.25 + 0.1 x 200) = 68,000; a sent message saves 60 x (5 + 0.1 x 100) = 900,
+  // a received one 60 x (1.25 + 0.1 x 100) = 675.
+  assert.equal(at(1), Math.ceil(68000 / 900));
+  assert.equal(at(0), Math.ceil(68000 / 675));
+  assert.equal(at(1), 76, `all sent: ${at(1)}`);
+  assert.equal(at(0), 101, `all received: ${at(0)}`);
   assert.ok(at(0.5) > at(1) && at(0.5) < at(0));
 });
 

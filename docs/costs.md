@@ -29,8 +29,8 @@ Prices were checked on 2026-09-30. The tool uses 5, 1.25 and 0.1 by default, and
 
 | input | value | source |
 |---|---|---|
-| spec plus a small dictionary, loaded per session | 3,100 tokens | [eval/RESULTS.md](../eval/RESULTS.md#break-even): the spec is 2,641 tokens, and a small dictionary adds about 500 |
-| tokens one message saves | 65 | [eval/RESULTS.md](../eval/RESULTS.md): 64.7 on average over 268 measured messages |
+| spec plus a small dictionary, loaded per session | 3,200 tokens | [eval/RESULTS.md](../eval/RESULTS.md#break-even): the spec is 2,674 tokens, and a small dictionary adds about 500 |
+| tokens one message saves | 60 | [eval/RESULTS.md](../eval/RESULTS.md): 60.0 on average over 268 measured messages |
 | stub | 138 tokens | the brevity skill's name and description, which a session carries so it can load brevity on demand; the default in `tools/cost-model.mjs` |
 
 ### Assumptions
@@ -48,15 +48,15 @@ Prices were checked on 2026-09-30. The tool uses 5, 1.25 and 0.1 by default, and
 - **Assumption: the token counts carry over to current models.** eval/RESULTS.md counts with Anthropic's legacy
   public tokenizer, and current models produce about 30% more tokens for the same text ([Pricing][pricing]). The spec
   and the saving grow together, so break-even counts move little, but the absolute numbers grow.
-- **Assumption: every message saves 65 tokens.** Delegation prompts and subagent results are often longer than
-  peer messages, and in eval/RESULTS.md long messages saved more (30.9%).
+- **Assumption: every message saves 60 tokens.** Delegation prompts and subagent results are often longer than
+  peer messages, and in eval/RESULTS.md long messages saved more (29.7%).
 
 ## The model in plain words
 
 - **Loaded context is paid on every call, not once.** When a session loads something (a spec, a dictionary,
   `CLAUDE.md`), its first model call writes it to the prompt cache (1.25). Every later call reads it again (0.1),
-  because each request sends the whole context ([Manage costs][cc-costs]). A 3,100-token spec in a session of 200
-  calls costs 3,100 x (1.25 + 0.1 x 200) = 65,875 equivalents, and 94% of that is reads.
+  because each request sends the whole context ([Manage costs][cc-costs]). A 3,200-token spec in a session of 200
+  calls costs 3,200 x (1.25 + 0.1 x 200) = 68,000 equivalents, and 94% of that is reads.
 - **A message is paid three times.** Its writer pays for it as output (5). Its reader takes it in, as a cache write
   (1.25). Then both sessions carry it: each reads it again on every later call (0.1 per call, in each session).
 
@@ -73,21 +73,21 @@ R is the number of calls left in each session after the message. This is the for
 Three things follow.
 
 1. **A session needs about 2 x L / s messages to break even.** In a long session, reads dominate both sides: the
-   loaded context is read on all T calls, and a message on about T/2 calls on average. With L = 3,100 and s = 65,
-   that is about 95 messages, and fewer for a session that mostly writes, since output weighs 5:
+   loaded context is read on all T calls, and a message on about T/2 calls on average. With L = 3,200 and s = 60,
+   that is about 107 messages, and fewer for a session that mostly writes, since output weighs 5:
 
    ```
-   node tools/cost-model.mjs --saving 65 --load-tokens 3100 --turns 200
+   node tools/cost-model.mjs --saving 60 --load-tokens 3200 --turns 200
    ```
 
    ```
    break-even for a session with 200 calls that loads at its first call:
-     68 messages if it sends them all, 91 if it receives them all, 78 half and half
+     76 messages if it sends them all, 101 if it receives them all, 87 half and half
    ```
 
-   With `--turns 2000` the range is 92 to 95 messages.
+   With `--turns 2000` the range is 103 to 107 messages.
 2. **Cheaper cache reads change the answer little.** They cut the cost of loaded context and the saving on carried
-   messages alike. With `--read 0.05`, Claude Opus 5.5's rate, the same session needs 54 to 86 messages.
+   messages alike. With `--read 0.05`, Claude Opus 5.5's rate, the same session needs 60 to 96 messages.
 3. **The team's net is the sum over sessions.** A session that loads the context and exchanges few messages loses
    almost all of its load cost, and one busy session cannot pay for many such sessions.
 
@@ -101,36 +101,36 @@ and `…` marks where a long table or the list of assumptions was cut.
 [teams/pair.json](teams/pair.json): two sessions with 800 calls each, which send each other 100 messages each way.
 
 ```
-node tools/cost-model.mjs docs/teams/pair.json --saving 65 --load-tokens 3100
+node tools/cost-model.mjs docs/teams/pair.json --saving 60 --load-tokens 3200
 ```
 
 ```
 brevity cost model, in input-token equivalents (output 5x, cache write 1.25x, cache read 0.1x an input token)
-loaded per session: 3,100 tokens (--load-tokens)
-saving per message: 65 tokens (--saving)
+loaded per session: 3,200 tokens (--load-tokens)
+saving per message: 60 tokens (--saving)
 
 break-even for a session with 800 calls that loads at its first call:
-  87 messages if it sends them all, 94 if it receives them all, 90 half and half
+  97 messages if it sends them all, 106 if it receives them all, 101 half and half
 
 team: 2 sessions, 200 messages sent, 200 received
 hub: a session with at least its own break-even in messages (--threshold N sets one count); 2 of 2
 stub: the 138 tokens a session carries so it can load on its first message (the skill's name and description)
 policy                                            sessions that load      saved     cost       net
-always-on                                              2 from call 0  1,121,250  503,750  +617,500
-hub-only                                               2 from call 0  1,121,249  503,750  +617,499
-first-message                 2 from first message; 2 carry the stub  1,121,250  523,707  +597,543
-hub+first      2 from call 0, 0 from first message; 0 carry the stub  1,121,250  503,750  +617,500
-highest net: always-on (+617,500). A model, not a decision: check the assumptions below.
+always-on                                              2 from call 0  1,035,000  520,000  +515,000
+hub-only                                               2 from call 0  1,034,999  520,000  +514,999
+first-message                 2 from first message; 2 carry the stub  1,035,000  539,878  +495,122
+hub+first      2 from call 0, 0 from first message; 0 carry the stub  1,035,000  520,000  +515,000
+highest net: always-on (+515,000). A model, not a decision: check the assumptions below.
 
 net per session (0 = no brevity):
 session  calls  sent  received  break-even  hub  always-on  hub-only  first-message  hub+first
-api        800   100       100          90  yes   +308,750  +308,749       +298,771   +308,750
-web        800   100       100          90  yes   +308,750  +308,749       +298,771   +308,750
-total                                             +617,500  +617,499       +597,543   +617,500
+api        800   100       100         101  yes   +257,500  +257,499       +247,561   +257,500
+web        800   100       100         101  yes   +257,500  +257,499       +247,561   +257,500
+total                                             +515,000  +514,999       +495,122   +515,000
 …
 ```
 
-Each session exchanges 200 messages, more than twice its break-even of 90, so both come out ahead. Loading the spec
+Each session exchanges 200 messages, almost twice its break-even of 101, so both come out ahead. Loading the spec
 from the start (always-on) is best here. Loading it at the first message costs a little more, because each session
 carries the 138-token stub from its first call and its messages start early anyway. This is the shape brevity is
 built for.
@@ -143,67 +143,69 @@ make 150 calls each and exchange 1 to 14 messages each (30 peers with 1, 14 with
 4 with 9, 3 with 10, 2 with 12 and 1 with 14; median 2). Each peer receives half of its messages, rounded up.
 
 ```
-node tools/cost-model.mjs docs/teams/hub.json --saving 65 --load-tokens 3100 --reader-tokens 300
+node tools/cost-model.mjs docs/teams/hub.json --saving 60 --load-tokens 3200 --reader-tokens 300
 ```
 
 ```
 brevity cost model, in input-token equivalents (output 5x, cache write 1.25x, cache read 0.1x an input token)
-loaded per session: 3,100 tokens (--load-tokens)
-saving per message: 65 tokens (--saving)
+loaded per session: 3,200 tokens (--load-tokens)
+saving per message: 60 tokens (--saving)
 
 break-even for a session with 150 calls that loads at its first call:
-  62 messages if it sends them all, 89 if it receives them all, 73 half and half
+  70 messages if it sends them all, 100 if it receives them all, 82 half and half
 
 team: 81 sessions, 268 messages sent, 268 received
 hub: a session with at least its own break-even in messages (--threshold N sets one count); 1 of 81
 stub: the 138 tokens a session carries so it can load on its first message (the skill's name and description)
 reader card: 300 tokens (--reader-tokens), to read only: readers write in prose
 policy                                                               sessions that load      saved       cost         net
-always-on                                                                81 from call 0  1,981,525  4,653,875  -2,672,350
-hub-only                                                                  1 from call 0          0    623,875    -623,875
-first-message                                  81 from first message; 81 carry the stub  1,981,525  3,644,890  -1,663,365
-hub+first                       1 from call 0, 80 from first message; 80 carry the stub  1,981,525  3,619,423  -1,637,898
-hub+reader     1 from call 0, 80 readers from first received message; 80 carry the stub  1,168,180  1,050,577    +117,603
-highest net: hub+reader (+117,603). A model, not a decision: check the assumptions below.
-hub+reader stays above 0 with a reader card of up to 442 tokens.
+always-on                                                                81 from call 0  1,829,100  4,804,000  -2,974,900
+hub-only                                                                  1 from call 0          0    644,000    -644,000
+first-message                                  81 from first message; 81 carry the stub  1,829,100  3,755,784  -1,926,684
+hub+first                       1 from call 0, 80 from first message; 80 carry the stub  1,829,100  3,730,391  -1,901,291
+hub+reader     1 from call 0, 80 readers from first received message; 80 carry the stub  1,078,320  1,070,702      +7,618
+highest net: hub+reader (+7,618). A model, not a decision: check the assumptions below.
+hub+reader stays above 0 with a reader card of up to 309 tokens.
 hub-only saves nothing with one hub: a message saves only between two sessions that loaded the spec.
 
 net per session (0 = no brevity):
 session  calls  sent  received  break-even  hub   always-on  hub-only  first-message   hub+first  hub+reader
-hub      2,000   158       110          93  yes  +1,178,413  -623,875     +1,152,945  +1,178,413    +454,475
-peer-01    150     0         1          89          -49,806         0        -28,799     -28,799      -4,299
+hub      2,000   158       110         104  yes  +1,019,650  -644,000       +994,257  +1,019,650    +351,400
+peer-01    150     0         1         100          -51,475         0        -29,717     -29,717      -4,343
 …
-peer-31    150     1         1          73          -48,994         0        -35,736     -35,736      -4,299
+peer-31    150     1         1          82          -50,725         0        -36,967     -36,967      -4,343
 …
-peer-80    150     7         7          73          -40,706         0        -39,849     -39,849      -2,575
-total                                            -2,672,350  -623,875     -1,663,365  -1,637,898    +117,603
+peer-80    150     7         7          82          -43,075         0        -42,117     -42,117      -2,881
+total                                            -2,974,900  -644,000     -1,926,684  -1,901,291      +7,618
 …
 ```
 
-- **Loading the spec in every session loses 2.67 million.** This is what opting the project in with a `.brevity/`
-  folder does. The hub gains 1.18 million, but each peer loses 41,000 to 50,000: it carries the spec on each of its
+- **Loading the spec in every session loses 2.97 million.** This is what opting the project in with a `.brevity/`
+  folder does. The hub gains 1.02 million, but each peer loses 43,000 to 51,000: it carries the spec on each of its
   150 calls to save on 1 to 14 messages.
 - **Loading on demand loses less, but still loses.** A peer that loads the spec at its first message carries it for
   the rest of its life.
 - **Loading only in the hub saves nothing,** because the peers cannot read what the hub writes.
 - **Only a read-only card comes out ahead.** In hub+reader, the hub loads the full spec and each peer loads a card
-  that only decodes, at the first message it receives. With a 300-token card the team nets +117,603, and the largest
-  card that keeps it ahead is 442 tokens. brevity has no reader card: this is a modeled result, and
+  that only decodes, at the first message it receives. With a 300-token card the team nets +7,618, and the largest
+  card that keeps it ahead is 309 tokens. brevity has no reader card: this is a modeled result, and
   [issue #11](https://github.com/nsalloums/brevity/issues/11) tracks the design.
 
 The largest card depends on the assumptions. Each row adds one option to the command above:
 
 | option | what it assumes | largest card |
 |---|---|---|
-| none | the defaults above | 442 tokens |
-| `--first start` | each peer's first message arrives at its first call | 305 tokens |
-| `--reader-writes` | the card also lets peers write brevity | 1,297 tokens |
-| `--stub 0` | peers carry no 138-token stub before the card | 660 tokens |
-| `--read 0.05` | Claude Opus 5.5's cache-read price | 445 tokens |
-| `--read 0.025` | Claude Fable 5.1's cache-read price | 448 tokens |
-| `--write 2` | 1-hour cache writes | 409 tokens |
+| none | the defaults above | 309 tokens |
+| `--first start` | each peer's first message arrives at its first call | 218 tokens |
+| `--reader-writes` | the card also lets peers write brevity | 1,107 tokens |
+| `--stub 0` | peers carry no 138-token stub before the card | 526 tokens |
+| `--read 0.05` | Claude Opus 5.5's cache-read price | 320 tokens |
+| `--read 0.025` | Claude Fable 5.1's cache-read price | 337 tokens |
+| `--write 2` | 1-hour cache writes | 284 tokens |
 
-So a read-only card of about 300 to 440 tokens keeps this team ahead, and the answer barely moves with the price.
+So a read-only card of about 220 to 310 tokens keeps this team ahead, and the price moves the answer by less than 30
+tokens. The 300-token card above sits near that limit: if each peer's first message arrives at its first call, or
+with 1-hour cache writes, it nets less than 0.
 
 ### 3. An orchestrator with fan-out subagents
 
@@ -211,63 +213,63 @@ So a read-only card of about 300 to 440 tokens keeps this team ahead, and the an
 subagents makes 30 calls, receives its delegation prompt at call 0 (`"first": 0`), and sends back one result.
 
 ```
-node tools/cost-model.mjs docs/teams/fanout.json --saving 65 --load-tokens 3100 --reader-tokens 300
+node tools/cost-model.mjs docs/teams/fanout.json --saving 60 --load-tokens 3200 --reader-tokens 300
 ```
 
 ```
 brevity cost model, in input-token equivalents (output 5x, cache write 1.25x, cache read 0.1x an input token)
-loaded per session: 3,100 tokens (--load-tokens)
-saving per message: 65 tokens (--saving)
+loaded per session: 3,200 tokens (--load-tokens)
+saving per message: 60 tokens (--saving)
 
 break-even for a session with 30 calls that loads at its first call:
-  32 messages if it sends them all, 74 if it receives them all, 44 half and half
+  35 messages if it sends them all, 83 if it receives them all, 50 half and half
 
 team: 61 sessions, 120 messages sent, 120 received
 hub: a session with at least its own break-even in messages (--threshold N sets one count); 1 of 61
 stub: the 138 tokens a session carries so it can load on its first message (the skill's name and description)
 reader card: 300 tokens (--reader-tokens), to read only: readers write in prose
 policy                                                               sessions that load    saved       cost       net
-always-on                                                                61 from call 0  651,300  1,259,375  -608,075
-hub-only                                                                  1 from call 0        0    468,875  -468,875
-first-message                                  61 from first message; 61 carry the stub  651,300  1,311,595  -660,295
-hub+first                       1 from call 0, 60 from first message; 60 carry the stub  651,300  1,294,565  -643,265
-hub+reader     1 from call 0, 60 readers from first received message; 60 carry the stub  325,642    580,565  -254,923
-every policy costs more than it saves: not loading brevity (net 0) beats the best, hub+reader (-254,923).
-no reader card makes hub+reader positive: even a card of 0 tokens nets -178,423.
+always-on                                                                61 from call 0  601,200  1,300,000  -698,800
+hub-only                                                                  1 from call 0        0    484,000  -484,000
+first-message                                  61 from first message; 61 carry the stub  601,200  1,352,096  -750,896
+hub+first                       1 from call 0, 60 from first message; 60 carry the stub  601,200  1,335,190  -733,990
+hub+reader     1 from call 0, 60 readers from first received message; 60 carry the stub  300,593    595,690  -295,097
+every policy costs more than it saves: not loading brevity (net 0) beats the best, hub+reader (-295,097).
+no reader card makes hub+reader positive: even a card of 0 tokens nets -218,597.
 hub-only saves nothing with one hub: a message saves only between two sessions that loaded the spec.
 
 net per session (0 = no brevity):
 session       calls  sent  received  break-even  hub  always-on  hub-only  first-message  hub+first  hub+reader
-orchestrator  1,500    60        60          93  yes   +140,500  -468,875       +123,470   +140,500    -156,875
-sub-01           30     1         1          44         -12,476         0        -13,063    -13,063      -1,634
+orchestrator  1,500    60        60         104  yes    +78,500  -484,000        +61,594    +78,500    -196,000
+sub-01           30     1         1          50         -12,955         0        -13,541    -13,541      -1,652
 …
-total                                                  -608,075  -468,875       -660,295   -643,265    -254,923
+total                                                  -698,800  -484,000       -750,896   -733,990    -295,097
 …
 ```
 
 - **The orchestrator comes out ahead, and the team does not.** The orchestrator exchanges 120 messages, above its
-  break-even of 93, and gains 140,500. Each subagent loses 12,476, since it carries the spec for 30 calls to save on
+  break-even of 104, and gains 78,500. Each subagent loses 12,955, since it carries the spec for 30 calls to save on
   2 messages, and 60 of them sink the team.
 - **A read-only card cannot fix this shape,** even at 0 tokens: half of the traffic is results that the subagents
   write, and a card that only decodes leaves those in prose. A card that also lets them write keeps the team ahead
-  up to 577 tokens:
+  up to 321 tokens:
 
   ```
-  node tools/cost-model.mjs docs/teams/fanout.json --saving 65 --load-tokens 3100 --reader-tokens 300 --reader-writes
+  node tools/cost-model.mjs docs/teams/fanout.json --saving 60 --load-tokens 3200 --reader-tokens 300 --reader-writes
   ```
 
   ```
   …
-  hub+reader     1 from call 0, 60 readers from first message; 60 carry the stub  651,300    580,565   +70,735
-  highest net: hub+reader (+70,735). A model, not a decision: check the assumptions below.
-  hub+reader stays above 0 with a reader card of up to 577 tokens.
+  hub+reader     1 from call 0, 60 readers from first message; 60 carry the stub  601,200    595,690    +5,510
+  highest net: hub+reader (+5,510). A model, not a decision: check the assumptions below.
+  hub+reader stays above 0 with a reader card of up to 321 tokens.
   …
   ```
 
 - **The bigger lever here is the size of what comes back.** A result stays in the orchestrator's context for the
   rest of its calls. With the prices above, a 1,000-token result that arrives halfway through costs
-  1,000 x (1.25 + 0.1 x 750) = 76,250 equivalents: 15 times what the subagent paid to write it (5,000), and almost
-  6 times a subagent's whole spec load (3,100 x (1.25 + 0.1 x 30) = 13,175). A short result that points to its
+  1,000 x (1.25 + 0.1 x 750) = 76,250 equivalents: 15 times what the subagent paid to write it (5,000), and more than
+  5 times a subagent's whole spec load (3,200 x (1.25 + 0.1 x 30) = 13,600). A short result that points to its
   details saves more than any encoding. Anthropic's research system has subagents store their outputs and pass
   lightweight references back to the lead agent ([multi-agent research system][ma]); for brevity, that idea is
   [issue #20](https://github.com/nsalloums/brevity/issues/20).
@@ -313,8 +315,8 @@ List each session with the model calls it makes and the messages it exchanges wi
   delegation prompt starts.
 
 ```
-node tools/cost-model.mjs sessions.json --saving 65
-node tools/cost-model.mjs sessions.json --saving 65 --reader-tokens 300
+node tools/cost-model.mjs sessions.json --saving 60
+node tools/cost-model.mjs sessions.json --saving 60 --reader-tokens 300
 node tools/cost-model.mjs sessions.json --messages messages.json --enc encodings.json
 ```
 
