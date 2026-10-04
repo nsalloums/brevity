@@ -3,19 +3,66 @@
 Every entry follows [RELEASING.md](RELEASING.md): a criticality level, why the release exists, what changed, the
 evidence, compatibility and upgrade steps. Versions follow semantic versioning read from the protocol's side.
 
-## [Unreleased]
+## [0.5.1] - 2026-10-04
 
-Changes waiting on `next` for the next release (see [RELEASING.md](RELEASING.md)).
+**Criticality:** high. The README promised more than a session gets: a 25% saving with no known loss, and a
+lossless format.
 
-- **#42, high.** README.md, eval/RESULTS.md and docs/costs.md led with the audited 25% saving and no known loss. They
-  now give the single-pass pilot from #26 next to it: 15.4% saved (about 37 tokens per message), a decision-relevant
-  fact lost in 14.9 messages per 100, and a break-even of 123-164 messages for a 200-call session, not 76-101.
-  The README also says that terse English did about as well in the pilot.
-- **#44, high.** The README's tagline and its rule «Lossless where it matters» said every message keeps those facts,
-  and SPEC.md's title said «lossless», but a single writing pass lost a decision-relevant fact in 14.9 messages per
-  100. They now state keeping every such fact as the goal and the writer's duty, and the README points to the
-  measured rate. The title's wording changes and no rule does: no message decodes differently, so the evaluation
-  was not re-run.
+### Why
+
+- **#42, high.** The README and eval/RESULTS.md led with about 25% fewer tokens and no known decision-relevant
+  loss. That figure comes from encodings repaired over nine rounds of blind decoding and auditing, by encoders
+  pushed toward a 50% target. A session writes each message once. A single-pass pilot on the same 268 messages
+  (#26) saved 15.4% and lost a decision-relevant fact in 14.9 messages per 100 (95% CI 11.2-19.7). In the same
+  pilot, terse English did about as well at equal loss and cost less to load.
+- **#44, high.** The README's tagline, its rule «Lossless where it matters» and SPEC.md's title said that every
+  message keeps those facts. The single-pass loss rate shows they do not.
+
+### Changes
+
+- **README.md:**
+  - The Results section leads with the single-pass figures: about 15% fewer tokens, about 37 per message, and a
+    fact lost in roughly 15 of 100 messages. The audited 25% follows as such.
+  - A new bullet reports that terse English did about as well in the pilot.
+  - The break-even reads 123-164 messages for a 200-call session at 37 tokens per message, next to 76-101 at the
+    audited 60.
+  - The tagline and the rule now called «Keep what matters» state the goal and the writer's duty, not a guarantee.
+  - The README says exactly what `tools/idcheck.mjs` checks (#42, #44).
+- **eval/RESULTS.md:** a new section, «Single writing pass (pilot, 2026-10-04)», gives the pilot's table, the
+  terse-English comparison and its limits. The audited figures are labelled as audited, and the break-even adds the
+  single-pass value (#42).
+- **docs/costs.md:** a note says that the worked examples use the audited 60 tokens per message, and that a single
+  pass saves about 37 (#42).
+- **SPEC.md 0.5:** only the title changes, to «short, public messages between agent sessions that aim to keep every
+  decision-relevant fact». No rule, verb or example changes. The Cursor rule and the skill's copy of the spec are
+  regenerated from it (#44).
+
+### Evidence
+
+- **Numbers.** The pilot figures are the aggregates published in #26, from one writing pass on the 268 private
+  messages of eval/RESULTS.md. That pass used SPEC 0.5 and the evaluation's dictionary, with the same blind decode,
+  two-lens audit and skeptic as the evaluation.
+- **Break-even:** `node tools/cost-model.mjs --saving 37 --load-tokens 3200 --turns 200` gives 123-164 messages,
+  and `--saving 60` gives 76-101.
+- **Spec size:** 99 lines and 9,221 characters (was 9,185). 2,680 legacy tokens (was 2,674), +0.2%.
+- **Hook:** the four `hooks.json` commands were run the way Claude Code runs them, with the release commit as the
+  plugin.
+  - In a folder with `.brevity/`, part 0 holds the whole context in one part, 9,446 characters with no CR. The line
+    after `<!-- brevity SPEC.md -->` is the new title. Parts 1-3 print nothing.
+  - In a folder without `.brevity/`, no part prints anything.
+- **Plugin:** `claude plugin validate .` passes.
+- **Checks:** `node scripts/release-check.mjs --base origin/main` and `node tools/build-adapters.mjs --check` pass,
+  and so do the tools' tests.
+
+### Compatibility
+
+Every message written under 0.5.0 decodes the same: only the spec's title changed, not a rule. The spec grows by 36
+characters and 6 tokens.
+
+### Upgrade
+
+Claude Code plugin users run `/plugin marketplace update brevity`; the next session loads the new title. Projects
+that copy SPEC.md, the Cursor rule or the AGENTS.md block re-copy them. Nothing else changes.
 
 ## [0.5.0] - 2026-09-30
 
