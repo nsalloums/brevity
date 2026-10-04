@@ -1,7 +1,9 @@
 # brevity
 
-**Brevity codes for coding agents.** A short, public, lossless format for the messages coding-agent sessions send
-each other: peer messages, delegation prompts and subagent results.
+**Brevity codes for coding agents.** A short, public format for the messages coding-agent sessions send each
+other: peer messages, delegation prompts and subagent results. Its goal is to lose no decision-relevant fact, and
+keeping each one is the writer's job, not something the format guarantees: in a pilot where each message was
+written once, about 15 of every 100 still lost one (see [Results](#results)).
 
 Military and aviation radio use *brevity codes*: short words, documented in public manuals, that cut airtime without
 losing meaning. brevity does the same for agent traffic. It is **compression, not encryption**: anyone holding
@@ -65,8 +67,12 @@ and revised once, after calibration.
   not do.
 - **No private codes.** Every alias comes from the spec, the project dictionary, or a `DEF` line inside the same
   message.
-- **Lossless where it matters.** SHAs, numbers, file:line, owners, order, conditions, requests, questions,
-  corrections and quotes always survive. When the slots would lose nuance, free prose is allowed (`> ...`).
+- **Keep what matters.** The writer must keep SHAs, numbers, file:line, owners, order, conditions, requests,
+  questions, corrections and quotes. That is the writer's duty, not a guarantee: in the single-pass pilot, a
+  decision-relevant fact was lost in about 15 of every 100 messages (see [Results](#results)).
+  [tools/idcheck.mjs](tools/idcheck.mjs) catches a missing SHA, #N, file:line, number of 10 or more, or «quoted»
+  text when it is run on the originals and their encodings. A session does not run it as it writes, and no tool
+  checks owners, conditions or requests. When the slots would lose nuance, free prose is allowed (`> ...`).
 
 ## When it pays off
 

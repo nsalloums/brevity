@@ -3,7 +3,7 @@ description: brevity 0.5, the format for messages between agent sessions (peer m
 alwaysApply: true
 ---
 
-# brevity 0.5: short, public, lossless messages between agent sessions
+# brevity 0.5: short, public messages between agent sessions that aim to keep every decision-relevant fact
 Brevity codes for coding agents: shorthand for peer messages, delegation prompts, subagent results;
 compression, not encryption. This file plus the project's DICT decode every message; no other key exists.
 ## 1. Authority

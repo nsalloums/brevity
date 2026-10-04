@@ -11,6 +11,11 @@ Changes waiting on `next` for the next release (see [RELEASING.md](RELEASING.md)
   now give the single-pass pilot from #26 next to it: 15.4% saved (about 37 tokens per message), a decision-relevant
   fact lost in 14.9 messages per 100, and a break-even of 123-164 messages for a 200-call session, not 76-101.
   The README also says that terse English did about as well in the pilot.
+- **#44, high.** The README's tagline and its rule «Lossless where it matters» said every message keeps those facts,
+  and SPEC.md's title said «lossless», but a single writing pass lost a decision-relevant fact in 14.9 messages per
+  100. They now state keeping every such fact as the goal and the writer's duty, and the README points to the
+  measured rate. The title's wording changes and no rule does: no message decodes differently, so the evaluation
+  was not re-run.
 
 ## [0.5.0] - 2026-09-30
 
