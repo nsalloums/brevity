@@ -70,9 +70,9 @@ and revised once, after calibration.
 - **Keep what matters.** The writer must keep SHAs, numbers, file:line, owners, order, conditions, requests,
   questions, corrections and quotes. That is the writer's duty, not a guarantee: in the single-pass pilot, a
   decision-relevant fact was lost in about 15 of every 100 messages (see [Results](#results)).
-  [tools/idcheck.mjs](tools/idcheck.mjs) catches a missing SHA, #N, file:line, number or quote when it is run on
-  the originals and their encodings. A session does not run it as it writes, and no tool checks owners, conditions
-  or requests. When the slots would lose nuance, free prose is allowed (`> ...`).
+  [tools/idcheck.mjs](tools/idcheck.mjs) catches a missing SHA, #N, file:line, number of 10 or more, or «quoted»
+  text when it is run on the originals and their encodings. A session does not run it as it writes, and no tool
+  checks owners, conditions or requests. When the slots would lose nuance, free prose is allowed (`> ...`).
 
 ## When it pays off
 
