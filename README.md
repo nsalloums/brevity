@@ -1,7 +1,9 @@
 # brevity
 
-**Brevity codes for coding agents.** A short, public, lossless format for the messages coding-agent sessions send
-each other: peer messages, delegation prompts and subagent results.
+**Brevity codes for coding agents.** A short, public format for the messages coding-agent sessions send each
+other: peer messages, delegation prompts and subagent results. Its goal is to lose no decision-relevant fact, and
+keeping each one is the writer's job, not something the format guarantees: in a pilot where each message was
+written once, about 15 of every 100 still lost one (see [Results](#results)).
 
 Military and aviation radio use *brevity codes*: short words, documented in public manuals, that cut airtime without
 losing meaning. brevity does the same for agent traffic. It is **compression, not encryption**: anyone holding
@@ -34,14 +36,25 @@ identifier, number, owner, condition, request and prohibition, and drops the fra
 ## Results
 
 Measured on 268 real messages between Claude Code sessions (229 plus a 39-message holdout written after the
-spec), with blind decoding and two independent audits per pass:
+spec), with blind decoding and two independent audits:
 
-- **25% fewer tokens** in total (63,861 -> 47,776; median per message 201 -> 160.5), with no known
-  decision-relevant loss and every SHA, #N, file:line, number and quote kept (2,637 identifiers, 0 missing).
+- **About 15% fewer tokens from one writing pass, which is how a session writes.** In a pilot on the same 268
+  messages, one pass saved 15.4% in total (median 11.8%), about 37 tokens per message, and kept every identifier.
+  It lost a decision-relevant fact in roughly 15 of every 100 messages (14.9; 95% CI 11.2-19.7).
+- **25% fewer tokens after nine rounds of auditing and repair** (63,861 -> 47,776; median per message 201 ->
+  160.5), with no known decision-relevant loss and every SHA, #N, file:line, number and quote kept (2,637
+  identifiers, 0 missing). Those encoders aimed at 50%, and every loss the audits confirmed was fixed. A session
+  writes each message once, with no audit.
+- **Terse English did about as well.** In the pilot, on the messages that no approach lost a fact in, brevity saved
+  only about 3 tokens per message more than a 167-token instruction to write terse English with the same
+  dictionary, which loads in less than half the tokens. Without the dictionary, that instruction came out ahead on
+  the token bill in all four team shapes tested; brevity did only in the pair of busy sessions
+  ([issue #26](https://github.com/nsalloums/brevity/issues/26)).
 - **Not 50%.** Pushing harder dropped decision-relevant facts; about 28% of the text is identifiers, quotes and
   code that must stay as written.
-- **Worth it in busy sessions only.** The spec costs about 2.7k tokens per session, and a message saves about 60,
-  so a session needs roughly 76-101 messages to come out ahead: a coordinator, not a peer that sends two.
+- **Worth it in busy sessions only.** The spec costs about 2.7k tokens per session. At a single pass's 37 tokens
+  saved per message, a session needs roughly 123-164 messages to come out ahead (76-101 at the audited 60): a
+  coordinator, not a peer that sends two.
 
 The full method, the numbers per tokenizer and the break-even analysis are in [eval/RESULTS.md](eval/RESULTS.md).
 What counts as "decision-relevant" is defined in [eval/RUBRIC.md](eval/RUBRIC.md), written before the measurement
@@ -54,15 +67,20 @@ and revised once, after calibration.
   not do.
 - **No private codes.** Every alias comes from the spec, the project dictionary, or a `DEF` line inside the same
   message.
-- **Lossless where it matters.** SHAs, numbers, file:line, owners, order, conditions, requests, questions,
-  corrections and quotes always survive. When the slots would lose nuance, free prose is allowed (`> ...`).
+- **Keep what matters.** The writer must keep SHAs, numbers, file:line, owners, order, conditions, requests,
+  questions, corrections and quotes. That is the writer's duty, not a guarantee: in the single-pass pilot, a
+  decision-relevant fact was lost in about 15 of every 100 messages (see [Results](#results)).
+  [tools/idcheck.mjs](tools/idcheck.mjs) catches a missing SHA, #N, file:line, number of 10 or more, or «quoted»
+  text when it is run on the originals and their encodings. A session does not run it as it writes, and no tool
+  checks owners, conditions or requests. When the slots would lose nuance, free prose is allowed (`> ...`).
 
 ## When it pays off
 
 brevity saves tokens only when the sessions that load it exchange many messages each. The spec plus a small
 dictionary is about 3,200 tokens, and every session that loads them pays for them again on each model call it
-makes, as cache reads. A message saves about 60 tokens, once in the sender's context and once in the recipient's.
-So a long session needs roughly 76 to 101 messages before the spec pays for itself (see
+makes, as cache reads. A message written in one pass saves about 37 tokens (about 60 after the evaluation's
+audits), once in the sender's context and once in the recipient's. So a long session needs roughly 123 to 164
+messages before the spec pays for itself, or 76 to 101 at the audited saving (see
 [the break-even section](eval/RESULTS.md#break-even)), and a session that sends two never gets there.
 
 **Opting a project in is not enough.** A `.brevity/` folder loads the spec into every session of the project,
@@ -83,7 +101,9 @@ cost model finds that a read-only reader card of about 220 to 310 tokens would k
 tokens under its default assumptions, and up to 218 if each peer's first message arrives at its first call. The
 300-token card in the table is near that limit: if each peer's first message arrives at its first call, or with
 1-hour cache writes, it loses tokens too. That is a modeled result under the assumptions the tool prints, not a shipped feature; brevity has no
-reader card, and [issue #11](https://github.com/nsalloums/brevity/issues/11) tracks the design.
+reader card, and [issue #11](https://github.com/nsalloums/brevity/issues/11) tracks the design. All of these
+figures use the audited 60 tokens per message. At a single pass's 37, every policy in the table loses tokens, and
+no reader card keeps this team ahead, even one of 0 tokens.
 
 Opt a project in only when every session in it will be busy, such as a coordinator and a few long-lived sessions
 that trade hundreds of messages, and check your own team with [tools/cost-model.mjs](tools/cost-model.mjs) first.

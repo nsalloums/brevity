@@ -5,6 +5,10 @@ messages come from a private project, so no message text, name or path from them
 
 ## Summary
 
+The table and the notes below it describe audited encodings: written by encoders pushed toward a 50% target, then
+repaired over nine passes of blind decoding and auditing. A session writes each message once, with no audit, and
+saves less and loses more: see [Single writing pass](#single-writing-pass-pilot-2026-10-04).
+
 | | before | after | saving |
 |---|---|---|---|
 | Corpus, 229 messages, total tokens | 55,128 | 41,122 | **25.4%** |
@@ -35,6 +39,38 @@ messages come from a private project, so no message text, name or path from them
 - **The holdout behaves like the corpus** (23.8% vs 25.4%). Its 39 messages were written after the spec and the
   dictionary, and nobody who designed them saw those messages.
 - **It pays off only in busy sessions**: see [Break-even](#break-even).
+
+### Single writing pass (pilot, 2026-10-04)
+
+A pilot on the same 268 messages measured what one writing pass gives
+([issue #26](https://github.com/nsalloums/brevity/issues/26)): SPEC 0.5 and the evaluation's dictionary, no
+numeric target, gated by the identifier check, then the same blind decode, two-lens audit and skeptic as in
+[Method](#method).
+
+| All 268 messages, one writing pass | result |
+|---|---|
+| total saving | 15.4% |
+| median per-message saving | 11.8% |
+| tokens saved per message | about 37 |
+| confirmed decision-relevant losses | 41, in 40 messages |
+| messages with a loss, per 100 | 14.9 (95% CI 11.2-19.7) |
+| identifiers missing | 0 |
+
+- **These are the figures to expect** from a session that writes each message once.
+- **Terse English did about as well.** The pilot also gave the messages to a 167-token instruction asking for
+  terse English, a line 1 that carries the main fact, and the KEEP list, with the same encoder model, prompt
+  pressure and audit. With the same dictionary it saved 14.1% (median 11.0%) and lost a fact in 5.2 messages per
+  100 (95% CI 3.1-8.6). On the 202 messages that no approach lost a fact in, brevity saved 3.0 tokens per message
+  more (95% CI 1.3-5.0). Without the dictionary, the instruction saved 10.2% and lost a fact in 7.1 messages per
+  100 (95% CI 4.6-10.8). At Claude Opus 5.5 prices it was the only approach ahead on the token bill in all four
+  team shapes tested (this project's own team from
+  [issue #11](https://github.com/nsalloums/brevity/issues/11) and the pair, hub and fan-out teams in
+  [docs/teams](../docs/teams)); brevity was ahead only in the pair.
+- **Limits.** One pass and one decoder per approach, the same private corpus, and the legacy tokenizer. The setup
+  favours brevity: its spec and dictionary were tuned over nine passes on this corpus, the rubric is brevity's
+  own, and the terse instruction was written once.
+- **Break-even.** At about 37 tokens per message, a 200-call session needs roughly 123-164 messages: see
+  [Break-even](#break-even).
 
 ## Data
 
@@ -147,9 +183,15 @@ for a session making about 200 model calls:
 
 So a session needs roughly **76-101 messages** before the spec pays for itself
 (`node tools/cost-model.mjs --saving 60 --load-tokens 3200 --turns 200`). At 0.2.0, with a 2,641-token spec and
-about 65 tokens saved per message, the same tool gives 68-91; this page said 70-95, a rounded hand estimate. In the measured project, the
-coordinating session exchanged 268 messages and paid off. The median peer session exchanged 2 and would have lost
-tokens. That is why the Claude Code plugin loads the spec only in projects that opt in with a `.brevity/` folder.
+about 65 tokens saved per message, the same tool gives 68-91; this page said 70-95, a rounded hand estimate.
+
+These figures use the audited saving. A single writing pass saves about 37 tokens per message
+([Single writing pass](#single-writing-pass-pilot-2026-10-04)), and at that saving the same session needs roughly
+**123-164 messages** (`node tools/cost-model.mjs --saving 37 --load-tokens 3200 --turns 200`).
+
+In the measured project, the coordinating session exchanged 268 messages and paid off. The median peer session
+exchanged 2 and would have lost tokens. That is why the Claude Code plugin loads the spec only in projects that opt
+in with a `.brevity/` folder.
 
 ## Limitations
 
@@ -162,5 +204,6 @@ tokens. That is why the Claude Code plugin loads the spec only in projects that 
 - **The auditors miss things.** Each new full pass found losses the previous one missed (157, 73, 48, 29, then
   9, 19, 13, 12, 13). After pass 4 the count stopped falling: fresh auditors keep finding a dozen or so per pass.
 - **Encoders had help real senders lack.** They had a token counter and the identifier check. Real senders will
-  make the pass-1 kind of mistakes more often than the final numbers suggest.
+  make the pass-1 kind of mistakes more often than the final numbers suggest; the
+  [single-pass pilot](#single-writing-pass-pilot-2026-10-04) puts a number on it.
 - **Approximate tokenizer.** The Anthropic count uses the legacy tokenizer, not the one current models use.
