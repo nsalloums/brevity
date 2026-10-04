@@ -33,6 +33,12 @@ Prices were checked on 2026-09-30. The tool uses 5, 1.25 and 0.1 by default, and
 | tokens one message saves | 60 | [eval/RESULTS.md](../eval/RESULTS.md): 60.0 on average over 268 measured messages |
 | stub | 138 tokens | the brevity skill's name and description, which a session carries so it can load brevity on demand; the default in `tools/cost-model.mjs` |
 
+The worked examples below use the audited 60 tokens per message. A session that writes each message once saves
+about 37 ([single writing pass](../eval/RESULTS.md#single-writing-pass-pilot-2026-10-04)), and at that saving a
+200-call session needs 123 to 164 messages to break even, not 76 to 101
+(`node tools/cost-model.mjs --saving 37 --load-tokens 3200 --turns 200`). At 37, no reader card keeps the hub team
+in example 2 ahead, even one of 0 tokens.
+
 ### Assumptions
 
 - **Assumption: plan limits weigh tokens as the API prices do.** On a Claude subscription, Claude Code usage draws

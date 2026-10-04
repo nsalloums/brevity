@@ -3,6 +3,15 @@
 Every entry follows [RELEASING.md](RELEASING.md): a criticality level, why the release exists, what changed, the
 evidence, compatibility and upgrade steps. Versions follow semantic versioning read from the protocol's side.
 
+## [Unreleased]
+
+Changes waiting on `next` for the next release (see [RELEASING.md](RELEASING.md)).
+
+- **#42, high.** README.md, eval/RESULTS.md and docs/costs.md led with the audited 25% saving and no known loss. They
+  now give the single-pass pilot from #26 next to it: 15.4% saved (about 37 tokens per message), a decision-relevant
+  fact lost in 14.9 messages per 100, and a break-even of 123-164 messages for a 200-call session, not 76-101.
+  The README also says that terse English did about as well in the pilot.
+
 ## [0.5.0] - 2026-09-30
 
 **Criticality:** normal. Blind decoders kept flagging the same spec points, and three confirmed losses came from
