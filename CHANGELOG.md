@@ -50,7 +50,11 @@ lossless format.
   - In a folder with `.brevity/`, part 0 holds the whole context in one part, 9,446 characters with no CR. The line
     after `<!-- brevity SPEC.md -->` is the new title. Parts 1-3 print nothing.
   - In a folder without `.brevity/`, no part prints anything.
-- **Plugin:** `claude plugin validate .` passes.
+- **Plugin:** `claude plugin validate .` passes. A real `claude -p --plugin-dir` run, with a signed-in CLI and the
+  release commit as the plugin, was asked to copy the line after `<!-- brevity SPEC.md -->` and say whether the skill
+  `brevity:brevity` is available:
+  - in a folder with `.brevity/`, it returned the new title and YES;
+  - in a folder without `.brevity/`, it returned NONE and YES.
 - **Checks:** `node scripts/release-check.mjs --base origin/main` and `node tools/build-adapters.mjs --check` pass,
   and so do the tools' tests.
 
