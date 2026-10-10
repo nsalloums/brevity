@@ -143,6 +143,24 @@ spec's verb table costs and, with your encodings, how often your traffic uses it
 removed. The saving per message comes from `--saving`, or from your own messages and encodings (see
 [Measure it on your own traffic](#measure-it-on-your-own-traffic)).
 
+### Measure your own team
+
+[tools/meter.mjs](tools/meter.mjs) measures what brevity actually cost and saved in your sessions, from the
+transcripts Claude Code keeps on your machine. Run it from your project's folder:
+
+```
+node /path/to/brevity/tools/meter.mjs
+```
+
+It prints a table with one row per session: its model calls, its bill in input-token equivalents, the copies of the
+spec that the hook injected, and their spec cost. That cost is priced call by call, so it includes copies written
+again after an idle cache miss, re-injections after a compaction, and duplicates after a resume. The row also gives
+the brevity and prose messages the session sent and received, their tokens, the estimated saving and the net. Below
+the table come the team's shares of the bill, how often and at what cost copies were written again, and each run
+of duplicated copies; `--json` adds each session's drops by compaction and resume. The saving is an estimate,
+because a real message has no prose original to compare with. `--team-json team.json` writes your sessions in the
+cost model's format, and the output gives the command that compares the model with the measurement.
+
 ## Where it works
 
 | Surface | What loads |
@@ -223,8 +241,13 @@ Copy `skills/brevity/` to `~/.agents/skills/brevity/` (Codex, Gemini CLI, Cursor
 - **The skill.** Claude reads `skills/brevity/SKILL.md` and `SPEC.md` from the plugin and, when they exist, the
   project's `.brevity/` dictionaries.
 - **The tools** in `tools/` are standalone scripts that the plugin never runs. They read only the files you pass
-  them, except `tools/cost-model.mjs`, which also counts the tokens of the plugin's `SPEC.md` and of the nearest
-  `.brevity/DICT.md` and `.brevity/DICT.local.md`, unless you pass `--load-tokens`.
+  them, with two exceptions. `tools/cost-model.mjs` also counts the tokens of the plugin's `SPEC.md` and of the
+  nearest `.brevity/DICT.md` and `.brevity/DICT.local.md`, unless you pass `--load-tokens`. `tools/meter.mjs` reads
+  your Claude Code transcripts: the `.jsonl` files under `~/.claude/projects/` (or `$CLAUDE_CONFIG_DIR/projects/`)
+  for the current directory and its worktrees, or the folders you name with `--project`. It only reads them, on your
+  machine, with no network. It prints numbers, times and 8-character session ids, also with `--json`; full session
+  ids, session titles and each message's time only with `--titles`. The only file it writes is the one you name with
+  `--team-json`.
 - **Privacy.** brevity has no server and collects, stores and sends no data. What it loads goes into your Claude
   session like any other context, under your Claude plan's own data terms.
 - **Trust.** A repository's `.brevity/DICT.md` enters Claude's context the way its `CLAUDE.md` does. Read it before

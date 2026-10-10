@@ -9,7 +9,8 @@ chat ([multi-agent research system][ma]), and Claude Code's documentation puts a
 tokens of a standard session when teammates run in plan mode ([Manage costs][cc-costs]).
 
 The numbers below come from [tools/cost-model.mjs](../tools/cost-model.mjs), on synthetic teams. Every price has a
-source under [Sources](#sources), and every assumption is marked as one.
+source under [Sources](#sources), and every assumption is marked as one. To measure what brevity actually cost and
+saved in your own Claude Code sessions instead, run [tools/meter.mjs](../tools/meter.mjs) on their transcripts.
 
 ## Prices and inputs
 
