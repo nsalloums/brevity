@@ -44,11 +44,12 @@
 //   Where lines carry no parentUuid, and when a prompt shrinks by more than 10% with no compaction or resume, a copy
 //   is gone if its end lies past the rebuilt prompt: the first call's prompt minus what was logged since the resume.
 // - Messages. Sent: SendMessage calls (a send whose result says success false failed) and delegation prompts
-//   (mcp__ccd_session__spawn_task). Received: user lines from a peer (origin.kind "peer"), and a delegation prompt
-//   that is a session's first message. Peer lines with handback true are subagent results, and Agent tool prompts go
-//   to subagents: both are counted apart. A message is brevity when a line after its first starts with a SPEC.md
-//   section 3 verb (DO, NO, REPLY, ASK, ASKn, An, WILL, DONE, IF, HOLD, GO, DEC, FIX, WARN, WHY, CHK, FILES, OWN, TELL,
-//   ORDER, NUM, HDR, MERGED, READY, ACK); otherwise it is prose.
+//   (mcp__ccd_session__spawn_task). Received: messages from a peer (origin.kind "peer"), logged as user lines or, when
+//   they arrive while the session is busy, as queued_command attachments, and counted once per msg_id; and a
+//   delegation prompt that is a session's first message. Peer messages with handback true are subagent results, and
+//   Agent tool prompts go to subagents: both are counted apart. A message is brevity when a line after its first
+//   starts with a SPEC.md section 3 verb (DO, NO, REPLY, ASK, ASKn, An, WILL, DONE, IF, HOLD, GO, DEC, FIX, WARN, WHY,
+//   CHK, FILES, OWN, TELL, ORDER, NUM, HDR, MERGED, READY, ACK); otherwise it is prose.
 // - Savings, an estimate. No prose original exists for a real message, so a brevity message of t tokens is taken to
 //   replace prose of t / (1 - r) tokens, r = --saving-ratio (default 0.154: the single-pass pilot in eval/RESULTS.md),
 //   and to save s = t x r / (1 - r). The sender saves s x output when it writes the message; then the sender and the
@@ -215,6 +216,7 @@ class Transcript {
     this.sinceCall = 0;
     this.droppedSinceCall = false;
     this.tools = new Map();
+    this.peerIds = new Set();
     this.firstHuman = null;
     this.dups = [];
     this.dupRun = null;
@@ -371,6 +373,17 @@ class Transcript {
     }, o);
   }
 
+  // A message from a peer session, logged once per msg_id: as a user line, or as a queued_command attachment when it
+  // arrived while the session was busy.
+  peer(origin, text, o) {
+    const id = origin.msg_id;
+    if (id !== undefined) {
+      if (this.peerIds.has(id)) return;
+      this.peerIds.add(id);
+    }
+    this.message(origin.handback ? 'handback' : 'received', origin.body ?? text, id ?? o.uuid, o, this.within(o.timestamp));
+  }
+
   toolUse(b, o, call) {
     const name = b.name ?? '';
     let item;
@@ -395,6 +408,7 @@ class Transcript {
     const text = lineText(o);
     this.grow(text);
     if (a.type === 'hook_additional_context') this.injection(o, a, text);
+    else if (a.type === 'queued_command' && a.origin?.kind === 'peer') this.peer(a.origin, typeof a.prompt === 'string' ? a.prompt : text, o);
     else if (a.type === 'skill_listing' && typeof a.content === 'string') {
       const entry = a.content.match(SKILL_ENTRY)?.[1];
       if (entry) this.add({ kind: 'skill', tokens: this.ctx.count(entry), owned: this.claim(this.ctx.lines, o.uuid) }, o);
@@ -422,9 +436,7 @@ class Transcript {
     this.grow(lineText(o));
     const origin = o.origin ?? {};
     const blocks = Array.isArray(o.message?.content) ? o.message.content : [];
-    if (origin.kind === 'peer') {
-      this.message(origin.handback ? 'handback' : 'received', origin.body ?? lineText(o), o.uuid, o, this.within(o.timestamp));
-    }
+    if (origin.kind === 'peer') this.peer(origin, lineText(o), o);
     for (const b of blocks) {
       const item = b?.type === 'tool_result' ? this.tools.get(b.tool_use_id) : undefined;
       if (item?.dir === 'sent' && (o.toolUseResult?.success === false || b.is_error === true)) item.failed = true;

@@ -4,7 +4,8 @@
 // tools/fixtures/meter/team holds four sessions. "hub" coordinates on claude-opus-5-5 (cache read 0.05): it sends a
 // brevity message, a prose one, a send that fails and a delegation prompt, receives a peer message, goes idle for
 // 92 minutes, compacts, and is resumed with its compaction copy still in context. "peer" (claude-sonnet-4-5, read 0.1,
-// 5-minute writes only) starts from that delegation prompt and is resumed past a parent that was never written.
+// 5-minute writes only) starts from that delegation prompt, gets a hub message and a subagent result while it is busy
+// (logged as queued_command attachments), and is resumed past a parent that was never written.
 // "fork" continues the hub under a new id. "test" is a claude -p run. Every injected copy is 800 characters, so
 // 200 tokens at chars/4, and the skill entry 30.
 import assert from 'node:assert/strict';
@@ -129,6 +130,20 @@ test('sent, failed and received messages, with the estimated saving where each o
   close(r.team.total.net, r.team.total.saving - r.team.total.specCost);
 });
 
+test('a peer message that arrives while the session is busy is logged as an attachment, and counts once', async () => {
+  const peer = session(await meter('--saving-ratio', '0.2'), 'peer');
+  // The queued_command attachment and a user line with the same msg_id are one message; the queued subagent result
+  // is a handback, not a received message.
+  const [q] = messages(peer, 'received');
+  assert.equal(messages(peer, 'received').length, 1);
+  assert.deepEqual([q.brevity, q.tokens, q.counted], [true, 30, true]);
+  assert.equal(messages(peer, 'handback').length, 1);
+  // Its own position: call 3 writes it (5-minute writes, 1.25), and the resume drops it.
+  close(q.saving, (30 / 4) * 1.25);
+  assert.equal(peer.tally.receivedBrevity, 2, 'with the delegation prompt');
+  assert.equal(peer.tally.handbacks, 1);
+});
+
 test('brevity is a body line that starts with a section 3 verb; anything else is prose', () => {
   assert.ok(isBrevity('#41 is merged.\nMERGED #41 3f9a0c2e1'));
   assert.ok(isBrevity('Two steps.\n1. DO rebase fix/cart'));
@@ -188,7 +203,7 @@ test('--team-json writes sessions that tools/cost-model.mjs reads', async () => 
   // prompts) and received (peer messages and delegation prompts), with the call at which the first one entered.
   assert.deepEqual(rows, [
     { name: 'hub', turns: 8, sent: 2, received: 1, first: 0 },
-    { name: 'peer', turns: 4, sent: 1, received: 1, first: 0 },
+    { name: 'peer', turns: 4, sent: 1, received: 2, first: 0 },
     { name: 'fork', turns: 1, sent: 0, received: 0 },
   ]);
   assert.match(res.stdout, /node tools\/cost-model\.mjs .*team\.json --saving [\d.]+ --load-tokens \d+ --write [\d.]+ --read 0\.05/);
