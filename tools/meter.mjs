@@ -12,8 +12,9 @@
 // --project names folders instead, and can be repeated. In a folder, each <session id>.jsonl is a session, and
 // <session id>/subagents/**/*.jsonl are its subagents: they are reported apart, never in the team totals. Workflow
 // journal.jsonl files carry no usage and are skipped. Files are read line by line, so their size does not matter.
-// The tool only reads: it uses no network and writes nothing but the --team-json file. It prints numbers and short
-// session ids; session titles, which can be private, only with --titles.
+// The tool only reads: it uses no network and writes nothing but the --team-json file. It prints numbers, times and
+// 8-character session ids, in the text output and in --json; full session ids, session titles (which can be private)
+// and each message's time only with --titles.
 //
 // Everything is in input-token equivalents: input 1, output 5, cache write 1.25 (5-minute) or 2 (1-hour), cache read
 // 0.05 on claude-opus-5-5, 0.025 on claude-fable-5-1 and claude-mythos-5-1, and 0.1 on any other model (Anthropic's
@@ -57,15 +58,16 @@
 //   the call writes it to the cache (the receiver's first call, the sender's next call, idle misses), the read price
 //   elsewhere. Unlike tools/cost-model.mjs, this includes the sender's own cache write.
 //
-// Token counts use @anthropic-ai/tokenizer when it is installed (npm i -D @anthropic-ai/tokenizer), the legacy
-// tokenizer behind eval/RESULTS.md's counts, and chars/4 otherwise. The output says which ran.
+// Token counts use @anthropic-ai/tokenizer, the legacy tokenizer behind eval/RESULTS.md's counts, when it is installed
+// where this file can import it: run npm i -D @anthropic-ai/tokenizer in the brevity checkout that holds this tool,
+// not in the project you measure. Otherwise they use chars/4. The output says which ran.
 
 import { createHash } from 'node:crypto';
-import { createReadStream, existsSync, readdirSync, writeFileSync } from 'node:fs';
+import { createReadStream, existsSync, readdirSync, realpathSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { basename, join, resolve } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import { createInterface } from 'node:readline';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 export const PRICES = { input: 1, output: 5, write5m: 1.25, write1h: 2 };
 export const READ_PRICES = { 'claude-opus-5-5': 0.05, 'claude-fable-5-1': 0.025, 'claude-mythos-5-1': 0.025 };
@@ -149,14 +151,18 @@ export function projectFolder(dir) {
   return resolve(dir).replace(/[^A-Za-z0-9]/g, '-');
 }
 
-// The Claude Code project folders for `cwd`: its own and its worktrees'.
-export function defaultProjects(cwd, root) {
-  const m = resolve(cwd).match(/^(.*?)[\\/]\.claude[\\/]worktrees[\\/][^\\/]+/);
-  const base = projectFolder(m ? m[1] : cwd);
+// The Claude Code project folders for `cwd`: its own and its worktrees'. The path is taken as given and as the file
+// system spells it (a shell can keep `c:\users\...` in lower case), and on Windows names match in any case.
+export function defaultProjects(cwd, root, platform = process.platform) {
+  const fold = (name) => (platform === 'win32' ? name.toLowerCase() : name);
+  const real = (dir) => { try { return realpathSync.native(dir); } catch { return resolve(dir); } };
+  const bases = new Set([resolve(cwd), real(cwd)].map((dir) => {
+    const m = dir.match(/^(.*?)[\\/]\.claude[\\/]worktrees[\\/][^\\/]+/);
+    return fold(projectFolder(m ? m[1] : dir));
+  }));
+  const ours = (name) => [...bases].some((b) => fold(name) === b || fold(name).startsWith(`${b}--claude-worktrees-`));
   if (!existsSync(root)) return [];
-  return readdirSync(root, { withFileTypes: true })
-    .filter((e) => e.isDirectory() && (e.name === base || e.name.startsWith(`${base}--claude-worktrees-`)))
-    .map((e) => join(root, e.name));
+  return readdirSync(root, { withFileTypes: true }).filter((e) => e.isDirectory() && ours(e.name)).map((e) => join(root, e.name));
 }
 
 export function transcripts(dirs) {
@@ -266,7 +272,9 @@ class Transcript {
   }
 
   add(item, o) {
-    Object.assign(item, { uuid: o.uuid, ts: o.timestamp, rate: 0, billed: 0, rewrites: 0, rewriteRate: 0, dropped: null });
+    Object.assign(item, {
+      uuid: o.uuid, ts: o.timestamp, rate: 0, rateLoaded: 0, outputRateLoaded: 0, billed: 0, rewrites: 0, rewriteRate: 0, dropped: null,
+    });
     this.items.push(item);
     this.pending.push({ item, after: 0, beforeMarker: false });
     return item;
@@ -339,6 +347,9 @@ class Transcript {
     if (!call.counted) return;
 
     call.index = this.counted++;
+    // From the session's first call with a spec copy on, brevity is loaded; what those calls bill is also kept apart.
+    if (this.loadStart === null && this.live.some((it) => it.kind === 'spec')) this.loadStart = call.index;
+    call.loaded = this.loadStart !== null;
     const r = readPrice(call.model, this.ctx.prices);
     const w = writeRate(u, this.ctx.prices);
     const spec = [];
@@ -348,10 +359,9 @@ class Transcript {
       if (writing && it.billed) { it.rewrites++; it.rewriteRate += rate; }
       it.billed++;
       it.rate += rate;
+      if (call.loaded) it.rateLoaded += rate;
       if (it.kind === 'spec') spec.push({ it, rate });
     }
-    if (this.loadStart === null && spec.length) this.loadStart = call.index;
-    call.loaded = this.loadStart !== null;
     // Every copy after the oldest is a duplicate.
     if (spec.length > 1) {
       if (!this.dupRun) this.dups.push(this.dupRun = { from: call.ts, to: call.ts, calls: 0, copies: 0, extraTokens: 0, extra: 0 });
@@ -394,6 +404,7 @@ class Transcript {
     // The sender writes it as output in this call, and carries it from the next one.
     item.callIndex = call.index;
     if (item.counted) item.outputRate = this.ctx.prices.output;
+    if (item.counted && call.loaded) item.outputRateLoaded = this.ctx.prices.output;
     this.tools.set(b.id, item);
   }
 
@@ -458,7 +469,7 @@ class Transcript {
     const calls = [...this.calls.values()].filter((c) => c.counted);
     const bill = calls.reduce((a, c) => a + callBill(c.usage, c.model, prices), 0);
     const billLoaded = calls.filter((c) => c.loaded).reduce((a, c) => a + callBill(c.usage, c.model, prices), 0);
-    const cost = (kind) => this.items.filter((i) => i.kind === kind).reduce((a, i) => a + i.tokens * i.rate, 0);
+    const cost = (kind, key = 'rate') => this.items.filter((i) => i.kind === kind).reduce((a, i) => a + i.tokens * i[key], 0);
     const copies = this.items.filter((i) => i.kind === 'spec' && i.billed);
     const s = (i) => (i.brevity ? (i.tokens * ratio) / (1 - ratio) : 0);
     const msgs = this.items.filter((i) => i.kind === 'msg' && i.dir !== 'first');
@@ -482,16 +493,19 @@ class Transcript {
       copyTokens: copies.filter((i) => i.owned).map((i) => ({ tokens: i.tokens, spec: i.spec, dict: i.dict })),
       copyCost: cost('spec'),
       skillCost: cost('skill'),
+      copyCostLoaded: cost('spec', 'rateLoaded'),
+      skillCostLoaded: cost('skill', 'rateLoaded'),
       rewrites: rewrites.reduce((a, i) => a + i.rewrites, 0),
       rewriteCost: rewrites.reduce((a, i) => a + i.tokens * i.rewriteRate, 0),
       drops: this.drops,
       duplicates: this.dups.map((d) => ({ ...d })),
       messages: msgs.map((i) => ({
         dir: i.dir, owned: i.owned, counted: i.counted, brevity: i.brevity, tokens: i.tokens, failed: i.failed,
-        saving: s(i) * (i.rate + i.outputRate), callIndex: i.callIndex ?? null, ts: i.ts, hash: i.hash,
+        saving: s(i) * (i.rate + i.outputRate), savingLoaded: s(i) * (i.rateLoaded + i.outputRateLoaded),
+        callIndex: i.callIndex ?? null, ts: i.ts, hash: i.hash,
       })),
       first: this.firstHuman ? {
-        owned: this.firstHuman.owned, counted: this.firstHuman.counted, rate: this.firstHuman.rate,
+        owned: this.firstHuman.owned, counted: this.firstHuman.counted, rate: this.firstHuman.rate, rateLoaded: this.firstHuman.rateLoaded,
         callIndex: this.firstHuman.callIndex ?? null, candidates: this.firstHuman.candidates, ts: this.firstHuman.ts,
       } : null,
       loadStart: this.loadStart,
@@ -539,7 +553,7 @@ function settleDelegations(records, ratio) {
       const s = brevity ? (tokens * ratio) / (1 - ratio) : 0;
       r.messages.push({
         dir: 'delegation-received', owned: f.owned, counted: f.counted, brevity, tokens, failed: false, saving: s * f.rate,
-        callIndex: f.callIndex, ts: f.ts,
+        savingLoaded: s * f.rateLoaded, callIndex: f.callIndex, ts: f.ts,
       });
     }
     // Keep numbers only: no message text or fingerprints leave this function.
@@ -581,9 +595,12 @@ function summarize(records) {
     sessions: records.length, calls: sum('calls'), callsLoaded: sum('callsLoaded'), bill: sum('bill'), billLoaded: sum('billLoaded'),
     copies: sum('copies'), copyCost: sum('copyCost'), skillCost: sum('skillCost'), specCost: sum('specCost'),
     rewrites: sum('rewrites'), rewriteCost: sum('rewriteCost'), saving: sum('saving'), net: sum('net'),
+    specCostLoaded: sum('specCostLoaded'), savingLoaded: sum('savingLoaded'), netLoaded: sum('netLoaded'),
   };
   for (const key of Object.keys(t[0] ?? {})) out[key] = tsum(key);
-  out.shareOfLoadedBill = out.billLoaded ? { specCost: out.specCost / out.billLoaded, saving: out.saving / out.billLoaded, net: out.net / out.billLoaded } : null;
+  // Each share divides what the calls with brevity loaded billed for it by what those same calls billed in all.
+  const b = out.billLoaded;
+  out.shareOfLoadedBill = b ? { specCost: out.specCostLoaded / b, saving: out.savingLoaded / b, net: out.netLoaded / b } : null;
   return out;
 }
 
@@ -646,8 +663,17 @@ export async function run(argv, { cwd = process.cwd(), home = process.env.CLAUDE
     r.specCost = r.copyCost + r.skillCost;
     r.saving = r.messages.reduce((a, m) => a + m.saving, 0);
     r.net = r.saving - r.specCost;
+    r.specCostLoaded = r.copyCostLoaded + r.skillCostLoaded;
+    r.savingLoaded = r.messages.reduce((a, m) => a + m.savingLoaded, 0);
+    r.netLoaded = r.savingLoaded - r.specCostLoaded;
     r.tally = tally(r);
-    if (!o.titles) delete r.title;
+    // Short ids and no times or titles, unless --titles: they can point at private sessions.
+    if (!o.titles) {
+      delete r.title;
+      r.id = r.id.slice(0, 8);
+      if (r.parent) r.parent = r.parent.slice(0, 8);
+      for (const m of r.messages) delete m.ts;
+    }
   }
   const active = (r) => r.calls > 0 || r.tally.sentBrevity + r.tally.sentProse + r.tally.receivedBrevity + r.tally.receivedProse > 0;
   const team = records.filter((r) => r.kind === 'team' && active(r));
@@ -682,10 +708,15 @@ export async function run(argv, { cwd = process.cwd(), home = process.env.CLAUDE
     const w1h = team.reduce((a, r) => a + r.writes1h, 0);
     const w = w5 + w1h ? (w5 * prices.write5m + w1h * prices.write1h) / (w5 + w1h) : prices.write5m;
     const read = readPrice(Object.entries(models).sort((a, b) => b[1] - a[1])[0]?.[0], prices);
+    // The cost model next to this file, so the command runs from any folder. It has no input price.
+    const costModel = join(dirname(fileURLToPath(import.meta.url)), 'cost-model.mjs');
     result.teamJson = {
       file: o['team-json'], rows: rows.length,
-      compare: `node tools/cost-model.mjs ${o['team-json']} --saving ${+meanSaving.toFixed(1)} --load-tokens ${Math.round(load)} --write ${+w.toFixed(2)} --read ${read}`,
-      measuredNet: t.net,
+      compare: `node "${costModel}" "${o['team-json']}" --saving ${+meanSaving.toFixed(1)} --load-tokens ${Math.round(load)} `
+        + `--output ${prices.output} --write ${+w.toFixed(2)} --read ${read}`,
+      inputIgnored: prices.input !== PRICES.input,
+      // The file holds each session's calls and messages from its first spec copy on: compare the net of those calls.
+      measuredNet: t.netLoaded,
     };
   }
   return result;
@@ -708,7 +739,8 @@ export function render(r) {
   out.push('brevity meter: what brevity cost and saved in these Claude Code sessions, in input-token equivalents');
   out.push(`prices: input ${p.input}, output ${p.output}, cache write ${p.write5m} (5-minute) or ${p.write1h} (1-hour), `
     + `cache read ${typeof p.read === 'number' ? `${p.read} (--read)` : reads || 'by model'}`);
-  out.push(`tokenizer: ${r.tokenizer}${r.tokenizer === 'chars/4' ? ' (npm i -D @anthropic-ai/tokenizer for the legacy counts)' : ''}`);
+  out.push(`tokenizer: ${r.tokenizer}${r.tokenizer === 'chars/4'
+    ? ' (for the legacy counts, run npm i -D @anthropic-ai/tokenizer in the brevity checkout that holds this tool)' : ''}`);
   const win = r.window.since || r.window.until ? `calls from ${r.window.since ?? 'the start'} to ${r.window.until ?? 'the end'}` : 'all calls';
   out.push(`read: ${plural(r.transcripts.sessions, 'session transcript')} and ${plural(r.transcripts.subagents, 'subagent transcript')} `
     + `in ${plural(r.folders, 'folder')}; ${win}`);
@@ -728,7 +760,8 @@ export function render(r) {
     if (t.billLoaded) {
       const s = t.shareOfLoadedBill;
       out.push(`with brevity loaded (each session from its first spec copy on): ${plural(t.callsLoaded, 'call')}, bill ${fmt(t.billLoaded)}; `
-        + `spec cost ${pct(s.specCost)} of it, estimated saving ${pct(s.saving)}, net ${pct(s.net)}`);
+        + `on those calls, spec cost ${fmt(t.specCostLoaded)} (${pct(s.specCost)}), estimated saving ${fmt(t.savingLoaded)} (${pct(s.saving)}), `
+        + `net ${signed(t.netLoaded)} (${pct(s.net)})`);
     }
     out.push(`spec cost ${fmt(t.specCost)} = copies ${fmt(t.copyCost)} + skill entry ${fmt(t.skillCost)}; ${plural(t.rewrites, 'time')} a call `
       + `wrote a copy again after an idle cache miss or a rebuild (${fmt(t.rewriteCost)} of the cost)`);
@@ -748,7 +781,8 @@ export function render(r) {
   out.push(line('subagents, apart from the team', r.subagents.total, 'transcript'));
   if (r.teamJson) {
     out.push('', `wrote ${plural(r.teamJson.rows, 'session')} to ${r.teamJson.file}; to compare the cost model with this measurement `
-      + `(net ${signed(r.teamJson.measuredNet)}), run:`, `  ${r.teamJson.compare}`);
+      + `(net with brevity loaded ${signed(r.teamJson.measuredNet)}), run:`, `  ${r.teamJson.compare}`);
+    if (r.teamJson.inputIgnored) out.push(`the cost model has no input price, so --input ${p.input} is not passed to it`);
   }
   return out.join('\n');
 }

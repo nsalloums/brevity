@@ -152,12 +152,14 @@ transcripts Claude Code keeps on your machine. Run it from your project's folder
 node /path/to/brevity/tools/meter.mjs
 ```
 
-For each session it prints the model calls, the bill in input-token equivalents, the copies of the spec that the
-hook injected, and what each copy cost call by call: cache writes and reads, copies written again after an idle
-cache miss, re-injections after a compaction, and duplicates after a resume. It also prints the brevity and prose
-messages each session sent and received, the estimated saving and the net. The saving is an estimate, because a
-real message has no prose original to compare with. `--team-json team.json` writes your sessions in the cost model's
-format, and the output gives the command that compares the model with the measurement.
+It prints a table with one row per session: its model calls, its bill in input-token equivalents, the copies of the
+spec that the hook injected, and their spec cost. That cost is priced call by call, so it includes copies written
+again after an idle cache miss, re-injections after a compaction, and duplicates after a resume. The row also gives
+the brevity and prose messages the session sent and received, their tokens, the estimated saving and the net. Below
+the table come the team's shares of the bill, how often and at what cost copies were written again, and each run
+of duplicated copies; `--json` adds each session's drops by compaction and resume. The saving is an estimate,
+because a real message has no prose original to compare with. `--team-json team.json` writes your sessions in the
+cost model's format, and the output gives the command that compares the model with the measurement.
 
 ## Where it works
 
@@ -243,8 +245,9 @@ Copy `skills/brevity/` to `~/.agents/skills/brevity/` (Codex, Gemini CLI, Cursor
   nearest `.brevity/DICT.md` and `.brevity/DICT.local.md`, unless you pass `--load-tokens`. `tools/meter.mjs` reads
   your Claude Code transcripts: the `.jsonl` files under `~/.claude/projects/` (or `$CLAUDE_CONFIG_DIR/projects/`)
   for the current directory and its worktrees, or the folders you name with `--project`. It only reads them, on your
-  machine, with no network, and prints numbers and short session ids (session titles only with `--titles`). The only
-  file it writes is the one you name with `--team-json`.
+  machine, with no network. It prints numbers, times and 8-character session ids, also with `--json`; full session
+  ids, session titles and each message's time only with `--titles`. The only file it writes is the one you name with
+  `--team-json`.
 - **Privacy.** brevity has no server and collects, stores and sends no data. What it loads goes into your Claude
   session like any other context, under your Claude plan's own data terms.
 - **Trust.** A repository's `.brevity/DICT.md` enters Claude's context the way its `CLAUDE.md` does. Read it before

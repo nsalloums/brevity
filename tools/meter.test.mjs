@@ -7,7 +7,8 @@
 // 5-minute writes only) starts from that delegation prompt, gets a hub message and a subagent result while it is busy
 // (logged as queued_command attachments), and is resumed past a parent that was never written.
 // "fork" continues the hub under a new id. "test" is a claude -p run. Every injected copy is 800 characters, so
-// 200 tokens at chars/4, and the skill entry 30.
+// 200 tokens at chars/4, and the skill entry 30. tools/fixtures/meter/late holds one session that sends a brevity
+// message before it loads the spec, at a resume.
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
@@ -16,11 +17,12 @@ import { dirname, join } from 'node:path';
 import test, { after } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { run as costModel } from './cost-model.mjs';
-import { callBill, defaultProjects, isBrevity, projectFolder, readPrice, run, writeRate } from './meter.mjs';
+import { callBill, defaultProjects, isBrevity, projectFolder, readPrice, render, run, writeRate } from './meter.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const tool = join(here, 'meter.mjs');
 const team = join(here, 'fixtures', 'meter', 'team');
+const late = join(here, 'fixtures', 'meter', 'late');
 const dir = mkdtempSync(join(tmpdir(), 'brevity-meter-'));
 after(() => rmSync(dir, { recursive: true, force: true }));
 const count = (t) => Math.ceil(t.length / 4);
@@ -206,9 +208,36 @@ test('--team-json writes sessions that tools/cost-model.mjs reads', async () => 
     { name: 'peer', turns: 4, sent: 1, received: 2, first: 0 },
     { name: 'fork', turns: 1, sent: 0, received: 0 },
   ]);
-  assert.match(res.stdout, /node tools\/cost-model\.mjs .*team\.json --saving [\d.]+ --load-tokens \d+ --write [\d.]+ --read 0\.05/);
   const model = await costModel([file, '--saving', '10', '--load-tokens', '200'], { cwd: dir });
   assert.deepEqual(model.sessions.map((s) => [s.name, s.turns]), [['hub', 8], ['peer', 4], ['fork', 1]]);
+  // The printed command names the cost model next to the meter, so it runs from any folder, with the meter's prices.
+  const cmd = res.stdout.match(/^ {2}node "([^"]+)" "([^"]+)" (.+)$/m);
+  assert.ok(cmd, res.stdout);
+  assert.equal(cmd[1], join(here, 'cost-model.mjs'));
+  assert.match(cmd[3], /^--saving [\d.]+ --load-tokens \d+ --output 5 --write [\d.]+ --read 0\.05$/);
+  const compared = spawnSync(process.execPath, [cmd[1], cmd[2], ...cmd[3].split(' ')], { encoding: 'utf8', cwd: dir });
+  assert.equal(compared.status, 0, compared.stderr);
+  const priced = cli('--team-json', file, '--input', '2', '--output', '4');
+  assert.match(priced.stdout, /--output 4 /);
+  assert.match(priced.stdout, /the cost model has no input price, so --input 2 is not passed to it/);
+});
+
+test('the shares of the loaded bill count only the calls from each session\'s first copy on', async () => {
+  const r = await run(['--project', late, '--saving-ratio', '0.2'], { count, cwd: dir });
+  const [s] = r.team.sessions;
+  assert.deepEqual([s.calls, s.loadStart, s.callsLoaded], [3, 2, 1]);
+  close(s.billLoaded, 5 + 20 * 5 + 300 * 2 + 4225 * 0.05);
+  // The copy arrives with the resume, so all of its cost falls on the loaded call.
+  close(s.specCostLoaded, 200 * 2);
+  close(s.specCost, 200 * 2);
+  // The message was sent before: its output and its write at the next call fall outside; only call 3's read counts.
+  close(s.saving, (20 / 4) * (5 + 2 + 0.05));
+  close(s.savingLoaded, (20 / 4) * 0.05);
+  const share = r.team.total.shareOfLoadedBill;
+  close(share.specCost, 400 / s.billLoaded);
+  close(share.saving, s.savingLoaded / s.billLoaded);
+  close(share.net, (s.savingLoaded - 400) / s.billLoaded);
+  assert.match(render(r), /on those calls, spec cost 400 \(43\.66%\), estimated saving 0 \(0\.03%\), net -400 \(-43\.63%\)/);
 });
 
 test('the default folders are the current directory\'s and its worktrees\', also from inside a worktree', () => {
@@ -224,6 +253,17 @@ test('the default folders are the current directory\'s and its worktrees\', also
   assert.ok(/^[A-Za-z0-9-]+$/.test(base));
 });
 
+test('on Windows the folder is found whatever case the shell keeps the path in', () => {
+  const root = join(dir, 'projects-cased');
+  const repo = join(dir, 'Work', 'Acme');
+  const base = projectFolder(repo);
+  for (const name of [base, `${base}--claude-worktrees-blue`]) mkdirSync(join(root, name), { recursive: true });
+  // PowerShell keeps a path as it was typed, in lower case too; the folder is named after the path as the system spells it.
+  const lower = repo.toLowerCase();
+  assert.equal(defaultProjects(lower, root, 'win32').length, 2);
+  assert.equal(defaultProjects(lower, root, 'linux').length, 0, 'elsewhere, folder names are case-sensitive');
+});
+
 test('the output is numbers and short ids; titles only with --titles, and never message text', async () => {
   const plain = cli();
   assert.equal(plain.status, 0, plain.stderr);
@@ -234,11 +274,20 @@ test('the output is numbers and short ids; titles only with --titles, and never 
   assert.doesNotMatch(plain.stdout, /acme hub \(synthetic\)/);
   const titled = cli('--titles');
   assert.match(titled.stdout, /acme hub \(synthetic\)/);
+  if (/^tokenizer: chars\/4/m.test(plain.stdout)) assert.match(plain.stdout, /in the brevity checkout that holds this tool/);
   const json = cli('--json');
   assert.equal(json.status, 0, json.stderr);
   const parsed = JSON.parse(json.stdout);
   assert.equal(parsed.team.sessions.length, 3);
   assert.doesNotMatch(json.stdout, /rebase fix\/cart|Synthetic fixture text|acme hub/, 'no message text or title in --json');
+  // --json gives 8-character ids and no message times; --titles gives the full ids and the times.
+  const lateJson = (...args) => JSON.parse(spawnSync(process.execPath, [tool, '--project', late, '--json', ...args], { encoding: 'utf8', cwd: dir }).stdout);
+  const short = lateJson().team.sessions[0];
+  assert.equal(short.id, '11111111');
+  assert.equal(short.messages[0].ts, undefined);
+  const full = lateJson('--titles').team.sessions[0];
+  assert.equal(full.id, '11111111-2222-4333-8444-555555555555');
+  assert.equal(full.messages[0].ts, '2026-01-05T09:00:05.000Z');
   const bad = cli('--since', 'yesterday');
   assert.equal(bad.status, 2);
   assert.match(bad.stderr, /--since must be an ISO time/);
