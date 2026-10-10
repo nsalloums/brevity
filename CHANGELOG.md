@@ -3,6 +3,15 @@
 Every entry follows [RELEASING.md](RELEASING.md): a criticality level, why the release exists, what changed, the
 evidence, compatibility and upgrade steps. Versions follow semantic versioning read from the protocol's side.
 
+## [Unreleased]
+
+Changes waiting on `next` for the next release (see [RELEASING.md](RELEASING.md)).
+
+- **#47, normal.** New `tools/meter.mjs` measures what brevity cost and saved in a team's own Claude Code sessions,
+  from their local transcripts. It reports the bill, each injected copy of the spec priced call by call, and the
+  brevity messages sent and received, with the saving as an estimate. That covers the costs #40 says the cost model
+  leaves out: 1-hour cache writes, per-model read prices, re-injection, duplicated copies and idle cache misses.
+
 ## [0.5.1] - 2026-10-04
 
 **Criticality:** high. The README promised more than a session gets: a 25% saving with no known loss, and a
