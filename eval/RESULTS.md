@@ -34,8 +34,11 @@ saves less and loses more: see [Single writing pass](#single-writing-pass-pilot-
   errors and 3 came from the spec, which was clarified each time. The clarifications change no encoding by
   themselves; the 1,255 extra tokens (about 4.7 per message) are the restored facts.
 - **Identifiers: 0 missing.** A deterministic check ([tools/idcheck.mjs](../tools/idcheck.mjs)) finds 2,637
-  identifiers in the originals (SHAs, #N, file:line numbers, numbers >= 10, «quotes»), and all of them are in the
-  encodings.
+  identifiers in the originals, and all of them are in the encodings. That run used the coverage of brevity 0.7.0,
+  which `--legacy` still runs: SHAs, #N of two or more digits, the line numbers of file:line in `.ts`, `.tsx`,
+  `.js`, `.jsx`, `.mjs`, `.md`, `.sql`, `.json`, `.yaml`, `.yml` and `.css` files, numbers of two or more digits
+  and «quotes». It did not check a one-digit #N or number, the -M of a +N/-M diffstat, or file:line in other file
+  types ([#56](https://github.com/nsalloums/brevity/issues/56)).
 - **The holdout saved about as much as the corpus** (23.8% vs 25.4%), but it is not a sealed test. Its 39 messages
   were written after the spec and the dictionary, then went through all nine passes with the rest while the spec
   was revised between passes ([METHOD.md](METHOD.md#2-build-the-corpus)).
