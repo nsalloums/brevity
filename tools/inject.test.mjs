@@ -3,7 +3,6 @@
 //
 // Each test runs the four commands in hooks/hooks.json as Claude Code runs them: the command with ${CLAUDE_PLUGIN_ROOT}
 // set to this checkout, the hook input as JSON on stdin, in a synthetic project folder under the system's temp folder.
-// Transcripts are synthetic too: a few lines in Claude Code's format, built below.
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -134,183 +133,29 @@ test('a project that did not opt in gets nothing, whatever the arm', { skip: opt
   assert.deepEqual(hook({ source: 'startup', cwd: root }, { extra: { BREVITY_ALWAYS: '1', BREVITY_ARM: 'off' } }), ['<!-- brevity arm: off -->\n', '', '', '']);
 });
 
-// A synthetic transcript in Claude Code's format: one JSON object per line, each with uuid and parentUuid.
-function transcript(build) {
-  const lines = [];
-  let parent = null;
-  let k = 0;
-  const t = {
-    line(o, { root = false } = {}) {
-      const uuid = `u-${String(++k).padStart(4, '0')}`;
-      lines.push({ parentUuid: root ? null : parent, isSidechain: false, sessionId: 's-1', timestamp: '2026-01-05T10:00:00.000Z', ...o, uuid });
-      parent = uuid;
-      return uuid;
-    },
-    // One SessionStart: its hook_success lines, then one attachment that holds what each part printed.
-    start(name, parts, ts = '2026-01-05T10:00:00.000Z') {
-      t.line({ type: 'attachment', timestamp: ts, attachment: { type: 'hook_success', hookName: `SessionStart:${name}`, hookEvent: 'SessionStart', content: '' } });
-      const content = parts.filter(Boolean);
-      if (content.length) t.line({ type: 'attachment', timestamp: ts, attachment: { type: 'hook_additional_context', content, hookName: 'SessionStart', hookEvent: 'SessionStart' } });
-    },
-    user(text) { t.line({ type: 'user', message: { role: 'user', content: [{ type: 'text', text }] } }); },
-    assistant(text) { t.line({ type: 'assistant', message: { role: 'assistant', model: 'claude-opus-5-5', content: [{ type: 'text', text }] } }); },
-    compact() { t.line({ type: 'system', subtype: 'compact_boundary', content: 'Conversation compacted' }, { root: true }); },
-    orphan(text) { parent = 'u-never-written'; t.user(text); },
-    sidechain(text) { lines.push({ parentUuid: null, isSidechain: true, uuid: `side-${++k}`, type: 'user', message: { role: 'user', content: text } }); },
-  };
-  build(t);
-  const file = join(tmp, `transcript-${++n}.jsonl`);
-  writeFileSync(file, `${lines.map((l) => JSON.stringify(l)).join('\n')}\n`);
-  return file;
-}
-
-const resume = (root, file, extra) => hook({ hook_event_name: 'SessionStart', source: 'resume', cwd: root, transcript_path: file, session_id: 's-1' }, { extra });
-const startup = (root, extra) => hook({ source: 'startup', cwd: root }, { extra });
-
-test('a resume whose conversation still holds a copy of the arm injects nothing, in every part', () => {
+test('.brevity/arm is read whatever wrote it: UTF-16 with a byte order mark, a UTF-8 mark, NULs', () => {
   const root = project();
-  const file = transcript((t) => {
-    t.start('startup', startup(root));
-    t.user('Synthetic request: rebase fix/cart onto main.');
-    t.assistant('Synthetic answer: rebased.');
-  });
-  assert.deepEqual(resume(root, file), ['', '', '', '']);
-  // The same for each arm, and for a resume that follows an earlier resume's copy.
-  for (const arm of ['lite', 'terse', 'off']) {
-    const again = transcript((t) => {
-      t.start('startup', startup(root, { BREVITY_ARM: arm }));
-      t.user('Synthetic request.');
-      t.assistant('Synthetic answer.');
-      t.start('resume', []);
-      t.assistant('Synthetic answer after the resume.');
-    });
-    assert.deepEqual(resume(root, again, { BREVITY_ARM: arm }), ['', '', '', ''], arm);
-  }
-  // A startup, clear or compact injects whatever the transcript holds.
-  assert.deepEqual(hook({ source: 'startup', cwd: root, transcript_path: file }), brevityParts(root));
-  assert.deepEqual(hook({ source: 'clear', cwd: root, transcript_path: file }), brevityParts(root));
+  const file = join(root, '.brevity', 'arm');
+  const lite = [`<!-- brevity arm: lite -->\n${LITE}\n`, '', '', ''];
+  // What `"lite" > .brevity\arm` writes in Windows PowerShell 5.1: UTF-16 LE with a mark, and CRLF.
+  writeFileSync(file, Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from('lite\r\n', 'utf16le')]));
+  assert.deepEqual(hook({ source: 'startup', cwd: root }), lite);
+  writeFileSync(file, Buffer.concat([Buffer.from([0xfe, 0xff]), Buffer.from('lite\r\n', 'utf16le').swap16()]));
+  assert.deepEqual(hook({ source: 'startup', cwd: root }), lite, 'UTF-16 BE');
+  writeFileSync(file, Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from('lite\n')]));
+  assert.deepEqual(hook({ source: 'startup', cwd: root }), lite, 'UTF-8 with a mark');
+  writeFileSync(file, Buffer.from('lite\n', 'utf16le'));
+  assert.deepEqual(hook({ source: 'startup', cwd: root }), lite, 'UTF-16 LE without a mark');
 });
 
-test('a copy from before arms counts as a brevity copy', () => {
-  const root = project();
-  const file = transcript((t) => {
-    t.start('startup', [`<!-- brevity SPEC.md -->\n${SPEC}`, `<!-- brevity dictionary /work/acme/.brevity/DICT.md -->\n${DICT}`]);
-    t.user('Synthetic request.');
-  });
-  assert.deepEqual(resume(root, file), ['', '', '', '']);
-  assert.deepEqual(resume(root, file, { BREVITY_ARM: 'lite' }), [`<!-- brevity arm: lite -->\n${LITE}\n`, '', '', '']);
-});
-
-test('a resume after a compaction, or past a break in the chain, injects the copy', () => {
-  const root = project();
-  // The copy lies before the compaction; the compaction's own SessionStart printed nothing.
-  const compacted = transcript((t) => {
-    t.start('startup', startup(root));
-    t.user('Synthetic request.');
-    t.assistant('Synthetic answer.');
-    t.compact();
-    t.start('compact', []);
-    t.user('Synthetic summary of the conversation.');
-    t.assistant('Synthetic answer after the compaction.');
-  });
-  assert.deepEqual(resume(root, compacted), brevityParts(root));
-  // With the compaction's copy in place, nothing.
-  const recopied = transcript((t) => {
-    t.start('startup', startup(root));
-    t.user('Synthetic request.');
-    t.compact();
-    t.start('compact', hook({ source: 'compact', cwd: root }));
-    t.assistant('Synthetic answer after the compaction.');
-  });
-  assert.deepEqual(resume(root, recopied), ['', '', '', '']);
-  // The last line's parent was never written: Claude Code rebuilds the conversation from there, without the copy.
-  const broken = transcript((t) => {
-    t.start('startup', startup(root));
-    t.user('Synthetic request.');
-    t.orphan('Synthetic message after a break.');
-    t.assistant('Synthetic answer.');
-  });
-  assert.deepEqual(resume(root, broken), brevityParts(root));
-  // A copy on another branch, which the last line does not descend from, does not count either.
-  const branched = transcript((t) => {
-    t.user('Synthetic first request.');
-    const fork = t.line({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: 'Synthetic answer.' }] } });
-    t.start('startup', startup(root));
-    t.line({ type: 'user', parentUuid: fork, message: { role: 'user', content: [{ type: 'text', text: 'Synthetic edit.' }] } });
-  });
-  assert.deepEqual(resume(root, branched), brevityParts(root));
-});
-
-test('a resume where the arm changed injects the new arm, next to the old copy', () => {
-  const root = project({ arm: 'lite' });
-  const file = transcript((t) => {
-    t.start('startup', startup(root));
-    t.user('Synthetic request.');
-    t.assistant('Synthetic answer.');
-  });
-  assert.deepEqual(resume(root, file), ['', '', '', '']);
-  writeFileSync(join(root, '.brevity', 'arm'), 'terse');
-  assert.deepEqual(resume(root, file), [`<!-- brevity arm: terse -->\n${TERSE}\n`, '', '', '']);
-  writeFileSync(join(root, '.brevity', 'arm'), 'brevity');
-  assert.deepEqual(resume(root, file), brevityParts(root));
-  writeFileSync(join(root, '.brevity', 'arm'), 'off');
-  assert.deepEqual(resume(root, file), ['<!-- brevity arm: off -->\n', '', '', '']);
-});
-
-test('a missing, empty or unreadable transcript injects the copy', () => {
-  const root = project();
-  assert.deepEqual(resume(root, join(tmp, 'no-such-transcript.jsonl')), brevityParts(root));
-  assert.deepEqual(resume(root, undefined), brevityParts(root));
-  const empty = join(tmp, 'empty.jsonl');
-  writeFileSync(empty, '');
-  assert.deepEqual(resume(root, empty), brevityParts(root));
-  assert.deepEqual(resume(root, tmp), brevityParts(root), 'a folder, not a file');
-  const garbage = join(tmp, 'garbage.jsonl');
-  writeFileSync(garbage, 'not json\n{"uuid": 1}\n');
-  assert.deepEqual(resume(root, garbage), brevityParts(root));
-});
-
-test('lines of this SessionStart, sidechains and cut lines do not count', () => {
-  const root = project();
-  // A part that finished first may already be logged when another part reads the transcript: it is not a live copy.
-  const fresh = transcript((t) => {
-    t.user('Synthetic request.');
-    t.assistant('Synthetic answer.');
-    t.start('resume', startup(root), new Date().toISOString());
-  });
-  assert.deepEqual(resume(root, fresh), brevityParts(root));
-  // The copy is on the main chain; a subagent's sidechain line logged after it is not where the resume starts.
-  const side = transcript((t) => {
-    t.start('startup', startup(root));
-    t.user('Synthetic request.');
-    t.sidechain('Synthetic subagent prompt.');
-  });
-  assert.deepEqual(resume(root, side), ['', '', '', '']);
-  const cut = transcript((t) => {
-    t.start('startup', startup(root));
-    t.user('Synthetic request.');
-  });
-  writeFileSync(cut, `${readFileSync(cut, 'utf8')}{"parentUuid":"u-0003","uuid":"u-0004","type":"assis`);
-  assert.deepEqual(resume(root, cut), ['', '', '', '']);
-});
-
-test('a long transcript is read from its end, across lines longer than the read buffer', () => {
-  const root = project();
-  // 3 MB lines, in multibyte text, so lines and characters straddle the reader's 1 MB chunks.
-  const big = 'é€'.repeat(600000);
-  const file = transcript((t) => {
-    t.user('Synthetic request.');
-    t.start('startup', startup(root));
-    for (let i = 0; i < 4; i++) {
-      t.user(`Synthetic tool output ${i}: ${big}`);
-      t.assistant('Synthetic answer.');
+test('every SessionStart injects the current copy: a resume prints exactly what a startup prints', () => {
+  for (const arm of ['brevity', 'lite', 'terse', 'off']) {
+    const root = project({ arm });
+    const startup = hook({ hook_event_name: 'SessionStart', source: 'startup', cwd: root, session_id: 's-1' });
+    for (const source of ['resume', 'clear', 'compact']) {
+      // The transcript path is passed, as Claude Code passes it, and not read.
+      const input = { hook_event_name: 'SessionStart', source, cwd: root, session_id: 's-1', transcript_path: join(root, 'missing.jsonl') };
+      assert.deepEqual(hook(input), startup, `${arm} ${source}`);
     }
-  });
-  assert.deepEqual(resume(root, file), ['', '', '', '']);
-  const before = transcript((t) => {
-    t.start('startup', startup(root));
-    t.compact();
-    for (let i = 0; i < 4; i++) t.user(`Synthetic tool output ${i}: ${big}`);
-  });
-  assert.deepEqual(resume(root, before), brevityParts(root));
+  }
 });

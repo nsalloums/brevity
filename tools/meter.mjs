@@ -30,7 +30,7 @@
 //   alone. One that holds "<!-- brevity SPEC.md -->" and no arm marker, from before arms, is a brevity copy. A copy
 //   costs the tokens of its rendered text. The plugin's "brevity:brevity" line in a skill listing is counted the same
 //   way, as the skill entry; spec cost, or load cost per arm, is the copies plus the skill entry.
-// - Arms. A session is under the arm of the last copy that one of its calls carried (else its last copy), or none.
+// - Arms. A session is under the arm of the last copy that its counted calls carried, else of its last copy, or none.
 //   The per-arm summary adds up the sessions under each arm.
 // - Cost of a copy, call by call. While a copy is in a session's context, each call bills it at the cache read price
 //   if the call's cache read reaches past the copy's end in the prompt, and at the call's write rate otherwise: its
@@ -504,7 +504,7 @@ class Transcript {
       id: this.id,
       kind: this.kind === 'subagent' ? 'subagent' : /^sdk/.test(this.entrypoint ?? '') ? 'test' : 'team',
       title: this.titles.custom ?? this.titles.ai ?? null,
-      // The arm of the last copy a call carried (else the last copy), and every arm the session had, in order.
+      // The arm of the last copy its counted calls carried (else of its last copy), and every arm it had, in order.
       arm: (copies.at(-1) ?? all.at(-1))?.arm ?? 'none',
       arms: [...new Set(all.map((i) => i.arm))],
       calls: calls.length,
@@ -541,7 +541,9 @@ class Transcript {
 }
 
 // Reads every transcript and returns one record per transcript; see the header for what each number means.
-export async function meter(sources, { count, prices = PRICES, ratios = SAVING_RATIOS, since, until } = {}) {
+export async function meter(sources, { count, prices = PRICES, ratios, ratio, since, until } = {}) {
+  // `ratio`, the single ratio of earlier versions, stands for every compressed style.
+  ratios ??= ratio === undefined ? SAVING_RATIOS : { brevity: ratio, lite: ratio, terse: ratio, off: 0 };
   const ctx = { count, prices, since, until, calls: new Set(), lines: new Set() };
   const ordered = [];
   for (const s of sources) ordered.push({ ...s, first: s.kind === 'session' ? await firstTimestamp(s.file) : '9999' });
@@ -665,7 +667,7 @@ function summarize(records) {
   return out;
 }
 
-// The sessions under each arm (the arm of each one's last copy, or none) and what they add up to. Each share divides
+// The sessions under each arm (see the header) and what they add up to. Each share divides
 // by the bill of the arm's sessions.
 export function perArm(sessions, ratios) {
   const arms = {};
@@ -775,6 +777,8 @@ export async function run(argv, { cwd = process.cwd(), home = process.env.CLAUDE
     tokenizer: tok.name,
     prices: { ...prices, read: prices.read ?? 'by model', readByModel: Object.fromEntries(Object.keys(models).map((m) => [m, readPrice(m, prices)])) },
     models,
+    // The brevity ratio, or the override: the key earlier versions wrote.
+    savingRatio: override ?? ratios.brevity,
     savingRatios: ratios,
     savingRatioOverride: override ?? null,
     window: { since: o.since === undefined ? null : new Date(o.since).toISOString(), until: o.until === undefined ? null : new Date(o.until).toISOString() },
@@ -853,7 +857,8 @@ export function render(r) {
         counts(m, 'received'), fmt(m.messageTokens), fmt(x.saving), signed(x.net)];
     };
     out.push(table([head, ...r.team.sessions.map((s) => row(s, s.id.slice(0, 8), s.title, s.arm)), row(t, 'total', '', '')], r.titles ? 3 : 2));
-    out.push(`arm = the arm of the session's last copy (none: no copy). ${split} = ${styles.map((s) => s.toLowerCase()).join('/')}.`);
+    out.push('arm = the arm of the last copy the session\'s counted calls carried, else of its last copy (none: no copy).');
+    out.push(`${split} = ${styles.map((s) => s.toLowerCase()).join('/')}.`);
     out.push('sent = SendMessage deliveries and delegation prompts; received = peer messages and delegation prompts.');
     if (t.billLoaded) {
       const s = t.shareOfLoadedBill;
@@ -873,7 +878,7 @@ export function render(r) {
         ? `brevity ${rs.brevity}, lite ${rs.lite}, terse ${rs.terse} (the single-pass pilot, issue #26)`
         : `${r.savingRatioOverride} for brevity, lite and terse (--saving-ratio)`}; prose, and what is written under off, saves nothing.`);
 
-    out.push('', 'per arm (each session under the arm of its last copy; % = share of those sessions\' bill):');
+    out.push('', 'per arm (each session under its arm, as above; % = share of those sessions\' bill):');
     const share = (a, key) => (a.shareOfBill ? pct(a.shareOfBill[key]) : '-');
     out.push(table([
       ['arm', 'ratio', 'sessions', 'calls', 'bill', 'load cost', 'load %', 'sent', 'received', 'est. saving', 'saving %', 'net', 'net %'],

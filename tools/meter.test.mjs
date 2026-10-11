@@ -23,7 +23,9 @@ import { dirname, join } from 'node:path';
 import test, { after } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { run as costModel } from './cost-model.mjs';
-import { callBill, defaultProjects, isBrevity, projectFolder, readPrice, render, run, writeRate } from './meter.mjs';
+import {
+  callBill, defaultProjects, isBrevity, meter as meterRecords, projectFolder, readPrice, render, run, transcripts, writeRate,
+} from './meter.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const tool = join(here, 'meter.mjs');
@@ -341,7 +343,7 @@ test('a lite, terse or off copy is the whole injection after its marker; an off 
   assert.deepEqual(r.duplicates.map((d) => [d.session, d.copies, d.calls]), [['switch', 2, 2]]);
 });
 
-test('a session is under the arm of its last copy; what it sends is written under the newest copy in its context', async () => {
+test('a session is under the arm of the last copy its calls carried; what it sends is written under the newest copy in its context', async () => {
   const r = await arms();
   assert.deepEqual(r.team.sessions.map((s) => [s.id, s.arm, s.arms]), [
     ['lite', 'lite', ['lite']], ['terse', 'terse', ['terse']], ['switch', 'off', ['lite', 'off']], ['plain', 'none', []],
@@ -397,7 +399,8 @@ test('the per-arm summary adds up the sessions under each arm', async () => {
   const text = render(r);
   assert.match(text, /^session +arm +calls +bill +copies +load cost +sent b\/l\/t\/p +received b\/l\/t\/p/m);
   assert.match(text, /^terse +terse +3 +3,222 +1 +168 +0\/0\/1\/0 +0\/1\/0\/0 /m);
-  assert.match(text, /^per arm \(each session under the arm of its last copy/m);
+  assert.match(text, /^arm = the arm of the last copy the session's counted calls carried, else of its last copy/m);
+  assert.match(text, /^per arm \(each session under its arm, as above/m);
   assert.match(text, /^lite +0\.087 +1 +2 +2,810 +205 +7\.29% +1 +0 +17 +0\.59% +-188 +-6\.70%$/m);
   assert.match(text, /^none +- +1 +1 +1,255 +0 /m);
   assert.match(text, /with r = brevity 0\.154, lite 0\.087, terse 0\.102 \(the single-pass pilot, issue #26\)/);
@@ -408,6 +411,7 @@ test('--saving-ratio replaces the ratio of every arm, and off still saves nothin
   const r = await arms('--saving-ratio', '0.2');
   assert.deepEqual(r.savingRatios, { brevity: 0.2, lite: 0.2, terse: 0.2, off: 0 });
   assert.equal(r.savingRatioOverride, 0.2);
+  assert.equal(r.savingRatio, 0.2, 'the key earlier versions wrote');
   const [m1] = messages(session(r, 'lite'), 'sent');
   close(m1.saving, saved(25, 0.2) * 7);
   assert.equal(messages(session(r, 'switch'), 'sent')[1].saving, 0);
@@ -416,7 +420,12 @@ test('--saving-ratio replaces the ratio of every arm, and off still saves nothin
   const plain = await arms();
   assert.deepEqual(plain.savingRatios, { brevity: 0.154, lite: 0.087, terse: 0.102, off: 0 });
   assert.equal(plain.savingRatioOverride, null);
-});
+  assert.equal(plain.savingRatio, 0.154);
+  // The exported meter() still takes the single `ratio` of earlier versions.
+  const records = await meterRecords(transcripts([armsDir]), { count, ratio: 0.2 });
+  const lite = records.find((x) => x.id === 'lite').messages[0];
+  assert.deepEqual([lite.ratio, lite.saving], [0.2, saved(25, 0.2) * 7]);
+  assert.equal(records.find((x) => x.id === 'switch').messages[1].ratio, 0, 'off still saves nothing');});
 
 test('--team-json counts the messages that save, each at its own ratio', async () => {
   const file = join(dir, 'arms.json');

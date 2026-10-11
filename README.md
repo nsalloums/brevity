@@ -201,7 +201,9 @@ The hook does nothing until a project opts in: create a `.brevity/` folder at th
 set `BREVITY_ALWAYS=1`. Then, on startup, resume, `/clear` and compaction, it injects `SPEC.md`, then the nearest
 `.brevity/DICT.md` and `.brevity/DICT.local.md` found from the session's directory upwards. Git worktrees nested
 inside the main clone therefore pick up the main clone's dictionary. `BREVITY_DICT` can name extra files. On a
-resume, it injects nothing when the conversation being resumed still holds the copy it injected earlier.
+resume, the hook injects the current copy, and Claude Code itself keeps only the injected items whose text changed
+(observed on real resumes, not documented by Claude Code). A second copy therefore appears only when the copy's
+content changed, such as after a plugin update or a dictionary edit, which is what the session should load.
 
 **Choose what the hook loads.** To compare approaches on your own work, an opted-in project can load lighter
 instructions than the spec, and [tools/meter.mjs](tools/meter.mjs) reports each one apart. Write one word in
@@ -255,24 +257,22 @@ Copy `skills/brevity/` to `~/.agents/skills/brevity/` (Codex, Gemini CLI, Cursor
 
 - **The hook.** On session start, resume, `/clear` and compaction, Claude Code runs
   `node "${CLAUDE_PLUGIN_ROOT}/hooks/inject.mjs" <k>` four times (k = 0 to 3), because each hook's output is capped
-  at 10,000 characters. Each run reads the hook input that Claude Code passes on stdin, which includes the session's
-  directory, the event and the path of the session's transcript. It exits at once, with no output, unless a
-  `.brevity/` folder exists in the session's directory, in one of its parent directories or in
-  `CLAUDE_PROJECT_DIR`, or `BREVITY_ALWAYS=1` is set. A `.brevity/` folder in a parent directory, such as your home
-  folder, therefore opts in every project below it.
+  at 10,000 characters. Each run reads the hook input that Claude Code passes on stdin, for the session's directory.
+  It looks for each `.brevity/` path it uses (the folder, and the files listed below) in the session's directory and
+  then each parent directory up to the filesystem root; if none has it, in `CLAUDE_PROJECT_DIR` and its parents; then
+  in the hook's working directory and its parents. It takes the first it finds. Each run exits at once, with no
+  output, unless a `.brevity/` folder is found that way or `BREVITY_ALWAYS=1` is set. A `.brevity/` folder in a
+  parent directory, such as your home folder, therefore opts in every project below it.
 - **What the hook reads** when a project opts in:
-  - the arm, from `BREVITY_ARM` or the nearest `.brevity/arm` at or above the session's directory;
-  - for the `brevity` arm, the plugin's own `SPEC.md`, the nearest `.brevity/DICT.md` and `.brevity/DICT.local.md`
-    at or above the session's directory, and any files named in `BREVITY_DICT`;
+  - the arm, from `BREVITY_ARM`, else from `.brevity/arm`;
+  - for the `brevity` arm, the plugin's own `SPEC.md`, `.brevity/DICT.md` and `.brevity/DICT.local.md`, and any
+    files named in `BREVITY_DICT`;
   - for the `lite` and `terse` arms, the plugin's own `arms/lite.md` or `arms/terse.md`;
-  - on a resume only, the session's own transcript at `transcript_path`, read-only, to check whether the
-    conversation being resumed already holds a copy of the same arm. It reads the file from its end, follows the
-    conversation back no further than the last compaction or `/clear`, and prints nothing from it;
   - the environment variables `CLAUDE_PLUGIN_ROOT`, `CLAUDE_PROJECT_DIR`, `BREVITY_ALWAYS`, `BREVITY_DICT` and
     `BREVITY_ARM`.
 
-  It prints the arm's marker and files as context for the session, in parts under the cap, or nothing when a
-  resumed conversation already holds them.
+  It prints the arm's marker and files as context for the session, in parts under the cap, on every session start,
+  resume, `/clear` and compaction.
 - **What it never does.** No network requests, no file writes, no other files or variables read.
 - **The skill.** Claude reads `skills/brevity/SKILL.md` and `SPEC.md` from the plugin and, when they exist, the
   project's `.brevity/` dictionaries.
