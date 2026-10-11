@@ -39,11 +39,13 @@ Measured on 268 real messages between Claude Code sessions (229 plus a 39-messag
 spec), with blind decoding and two independent audits:
 
 - **About 15% fewer tokens from one writing pass, which is how a session writes.** In a pilot on the same 268
-  messages, one pass saved 15.4% in total (median 11.8%), about 37 tokens per message, and kept every identifier.
-  It lost a decision-relevant fact in roughly 15 of every 100 messages (14.9; 95% CI 11.2-19.7).
+  messages, one pass saved 15.4% in total (median 11.8%), about 37 tokens per message, and kept every identifier
+  that the 0.7.0 identifier check covers. It lost a decision-relevant fact in roughly 15 of every 100 messages
+  (14.9; 95% CI 11.2-19.7).
 - **25% fewer tokens after nine rounds of auditing and repair** (63,861 -> 47,776; median per message 201 ->
-  160.5), with no known decision-relevant loss and every SHA, #N, file:line, number and quote kept (2,637
-  identifiers, 0 missing). Those encoders aimed at 50%, and every loss the audits confirmed was fixed. A session
+  160.5), with no known decision-relevant loss and every SHA, #N, file:line, number and quote kept that the 0.7.0
+  identifier check covers (2,637 identifiers, 0 missing; [#56](https://github.com/nsalloums/brevity/issues/56)
+  widened the check since). Those encoders aimed at 50%, and every loss the audits confirmed was fixed. A session
   writes each message once, with no audit.
 - **Terse English did about as well.** In the pilot, on the messages that no approach lost a fact in, brevity saved
   only about 3 tokens per message more than a 167-token instruction to write terse English with the same
@@ -57,9 +59,10 @@ spec), with blind decoding and two independent audits:
   to come out ahead (64-92 at the audited 60): a coordinator, not a peer that sends two. At 0.1x cache reads and
   5-minute writes it needs 123-164 (76-101 at 60).
 
-The full method, the numbers per tokenizer and the break-even analysis are in [eval/RESULTS.md](eval/RESULTS.md).
+The numbers per tokenizer, the audit passes and the break-even analysis are in [eval/RESULTS.md](eval/RESULTS.md).
 What counts as "decision-relevant" is defined in [eval/RUBRIC.md](eval/RUBRIC.md), written before the measurement
-and revised once, after calibration.
+and revised once, after calibration. [eval/METHOD.md](eval/METHOD.md) writes up the method so that you can reuse
+it on any way of shortening agent messages.
 
 ## Rules that do not change
 
@@ -71,9 +74,10 @@ and revised once, after calibration.
 - **Keep what matters.** The writer must keep SHAs, numbers, file:line, owners, order, conditions, requests,
   questions, corrections and quotes. That is the writer's duty, not a guarantee: in the single-pass pilot, a
   decision-relevant fact was lost in about 15 of every 100 messages (see [Results](#results)).
-  [tools/idcheck.mjs](tools/idcheck.mjs) catches a missing SHA, #N, file:line, number of 10 or more, or «quoted»
-  text when it is run on the originals and their encodings. A session does not run it as it writes, and no tool
-  checks owners, conditions or requests. When the slots would lose nuance, free prose is allowed (`> ...`).
+  [tools/idcheck.mjs](tools/idcheck.mjs) catches a missing SHA, #N, file:line, number or diffstat of 10 or more (of
+  any size with `--small-numbers`), or «quoted» text when it is run on the originals and their encodings, and prints
+  the coverage it used. A session does not run it as it writes, and no tool checks owners, conditions or requests.
+  When the slots would lose nuance, free prose is allowed (`> ...`).
 
 ## When it pays off
 
@@ -199,9 +203,29 @@ traffic yet. A delivered message is:
 
 The meter matches each message to its recipient by the `msg_id` that both transcripts log, else by its text. When
 two sessions sent the same text, it uses the sender's name, and if that stays ambiguous the message flags nothing.
-It matches a reply to its addressee by name. A failed send never counts. Delegation prompts are not checked. The
-exact rules are in the header of [tools/meter.mjs](tools/meter.mjs). Like the rest of the output, the signals are
+It matches a reply to its addressee by name. A failed send never counts.
+
+Delegation prompts (`spawn_task`) get the same three signals in a table of their own, per arm and for the team, so
+that the SendMessage rates stay comparable. They are heuristics too. A prompt starts the session whose first message
+it is, and that session is also known by the prompt's title. When the same text was spawned more than once, each
+session takes the newest such prompt sent before it that no earlier session took, and a session that finds none
+started from no prompt. A `spawn_task` whose result is an error counts as a failed send, not as a prompt. Rates are per 100 delivered prompts, and `started` counts the
+prompts whose session the meter read: only those can be clarified or corrected. A prompt is:
+
+- **clarified** when one of the started session's first messages back to the sender, sent before the sender writes
+  to it again, asks about the prompt. No call window applies, because a new session reads before it writes.
+- **corrected** when the sender's next message to that session corrects or retracts something it sent.
+- **resent** when the sender spawns almost the same prompt again (a similarity of 0.8 or more).
+
+On this project's transcripts, as of 2026-10-11, 19 prompts all started a measured session, and the rules flagged
+1 clarification, no correction and no re-send. Nobody has checked those flags by hand yet.
+
+The exact rules are in the header of [tools/meter.mjs](tools/meter.mjs). Like the rest of the output, the signals are
 numbers only: the meter never prints message text, and prints session titles only with `--titles`.
+
+Token counts use `@anthropic-ai/tokenizer` when it is installed in the brevity checkout that holds the meter, else
+chars/4, and the output says which. Set `BREVITY_METER_TOKENIZER=chars/4` to use chars/4 even when the tokenizer is installed, for example
+to compare with a run on a machine without it. The meter's tests set it, so they pass either way.
 
 ## Where it works
 
@@ -400,8 +424,12 @@ node tools/idcheck.mjs messages.json encodings.json --verbose
 Build `messages.json` yourself, from messages you are allowed to use, as `[{"id": "m001", "text": "..."}]`, and
 write their encodings as `[{"id": "m001", "enc": "..."}]`. `measure.mjs` counts tokens before and after (with
 `@anthropic-ai/tokenizer` if it is installed, otherwise characters / 4). `idcheck.mjs` checks, deterministically,
-that every SHA, #N, file:line, number and «quote» of each original survives in its encoding. Keep real messages
-out of version control.
+that every SHA, #N, file:line, number of 10 or more and «quote» of each original survives in its encoding. The
+`coverage` line in its output names what it checked, its header lists the exceptions, and `--small-numbers` adds
+numbers below 10. Keep real messages out of version control.
+
+To check that each fact still arrives, and to compare approaches on the same messages, follow
+[eval/METHOD.md](eval/METHOD.md).
 
 Other formats, research and tools for agent messages, and how brevity's approach differs from each, are listed in
 [eval/RELATED.md](eval/RELATED.md).

@@ -3,6 +3,82 @@
 Every entry follows [RELEASING.md](RELEASING.md): a criticality level, why the release exists, what changed, the
 evidence, compatibility and upgrade steps. Versions follow semantic versioning read from the protocol's side.
 
+## [0.8.0] - 2026-10-11
+
+**Criticality:** normal. The identifier check covers what the docs said it covered, the meter's quality signals
+reach delegation prompts, and the evaluation method is linked where readers look.
+
+### Why
+
+- **#56, normal.** `tools/idcheck.mjs` is the gate behind every published "identifiers kept" figure. It skipped
+  one-digit #N, the second half of small diffstats, and file:line outside eleven web file types, and the docs
+  overstated what it covered.
+- **#58, low.** The meter's quality signals skipped delegation prompts, which start most sessions in a
+  coordinator-and-issues team.
+- **#60, low.** One meter test failed when the optional `@anthropic-ai/tokenizer` was installed, the setup the README
+  suggests. CI stayed green because it runs without the tokenizer.
+- **#27.** eval/METHOD.md shipped in 0.7.0, but nothing linked to it.
+
+### Changes
+
+- **Tools:**
+  - `tools/idcheck.mjs` now covers by default:
+    - file:line for any extension of 1-8 letters and digits;
+    - one-digit #N;
+    - both halves of +N/-M.
+
+    A SHA's digits in the encoding no longer count as a kept number. New `--small-numbers` adds numbers and
+    diffstats below 10, and `--legacy` gives the exact 0.7.0 coverage. Each run prints the coverage it used, and an
+    unknown option stops it with exit code 2. It has its first tests (#56).
+  - `tools/meter.mjs`:
+    - flags delegation prompts as clarified, corrected or resent, in a table apart from the SendMessage signals;
+    - counts a `spawn_task` whose result is an error as a failed send (#58);
+    - forces the chars/4 fallback when `BREVITY_METER_TOKENIZER=chars/4`, which its tests now set (#60).
+- **Docs:**
+  - The README, eval/RESULTS.md and eval/RUBRIC.md link eval/METHOD.md.
+  - RESULTS.md's Method section shortens to the steps the run followed, every number kept. RESULTS.md now says, as
+    METHOD.md does, that its holdout was not a sealed test (#27).
+  - The published identifier figures are labelled with the coverage that produced them (#56).
+
+### Evidence
+
+- **Identifier check.** On the private evaluation's final encodings (aggregates in #56):
+
+  | mode | identifiers checked | missing |
+  |---|---|---|
+  | `--legacy` | 2,637 | 0, identical to the published figure |
+  | new default | 2,649 | 0 |
+  | `--small-numbers` | 2,958 | 40, all below 10, about half of them list markers |
+
+  The five pilot arms give the same results in the first two modes. On 50,000 fuzzed pairs, `--legacy` matches the
+  0.7.0 tool exactly. The new tests kill 36 of 36 mutants.
+- **Meter.** Its earlier results are unchanged: on this project's transcripts up to 2026-10-03 it still reports
+  9 sessions, 1,088 calls, a 37,798,511 bill, 13 copies and a 217,372 spec cost. The delegation signals had two review
+  passes, and their tests kill 20 of 20 mutants.
+- **Tests:** `node --test tools/*.test.mjs` gives 90 of 90 without the tokenizer and 90 of 90 with it.
+- **Plugin.**
+  - `claude plugin validate .` passes.
+  - The four hook commands print what 0.7.0 printed: brevity 9,277 characters in part 0, terse 759, and nothing
+    without `.brevity/`.
+  - A real `claude -p --plugin-dir` run, with the installed plugin excluded, saw the brevity marker followed by
+    `<!-- brevity SPEC.md -->`.
+- **Spec size:** 99 lines, 9,221 characters, 2,680 legacy tokens; only the version in the title changes.
+- **Checks:** `node scripts/release-check.mjs --base origin/main` and `node tools/build-adapters.mjs --check` pass.
+
+### Compatibility
+
+Every message written under 0.7 decodes the same: the spec changes only the version in its title.
+
+`tools/idcheck.mjs` now checks more by default. A pipeline that compares its counts with figures from 0.7.0 or earlier
+passes `--legacy`, and a typo in an option is now an error, not ignored. The meter's JSON adds the delegation fields
+and keeps every earlier key.
+
+### Upgrade
+
+- **Claude Code plugin users:** run `/plugin marketplace update brevity`.
+- **Identifier check:** if you run it in a pipeline, check the printed `coverage` line, or pin `--legacy`.
+- **Other surfaces:** projects that copy SPEC.md, the Cursor rule or the AGENTS.md block re-copy them.
+
 ## [0.7.0] - 2026-10-11
 
 **Criticality:** normal. The cost model now prices the spec as Claude Code bills it, forked sessions get the current

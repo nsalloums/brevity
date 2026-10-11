@@ -27,6 +27,23 @@
 // it under a new id (its lines copied) and sends a correction of O1. "x" and "y" send "peer" the same text and log no
 // msg_id; peer logs a msg_id for each, and for a third copy from "w", which is not measured. Peer asks y, then w,
 // "Which one did you mean".
+//
+// tools/fixtures/meter/delegation holds the delegation signals (issue #58). "coord" (terse, titled "acme
+// coordinator") spawns D1, D2, D3, a spawn that fails (D4), its re-spawn D5 and a second failed spawn of it (D5b),
+// then D6 (D1 almost word for word), D7 (D3's text again), and D8 and D9 (the same text twice). "coord2" continues
+// coord under a new id, with its lines up to D3 copied. "s1" (lite) starts from D1, reads for 7 calls and asks "Did
+// you mean"; coord answers, sends a correction after D6, and coord2 corrects it. "s2" starts from D2 and reports;
+// coord thanks it, corrects it, and s2 asks about the correction with a question that also names D2's file. "s3"
+// (lite, no title, no msg_id) starts from D3, asks a third session "Did you mean", asks coord leave for its own step,
+// and coord2 corrects it by D3's title. "s5" starts from D5; coord2 writes to it before it asks "Did you mean". "s7",
+// titled apart from D7, starts from D7 after it was sent; coord corrects it by that title, delivered with no msg_id
+// under another name, before s7 asks. "s8" and "s9" both start after D8 and D9; "s9b" continues s9 under a new id and
+// receives coord's correction, sent with no msg_id to the title D8 and D9 share. "s0" begins with D2's text before
+// coord sent D2.
+//
+// Every run that checks numbers counts tokens with chars/4: run() takes `count`, and the command line gets
+// BREVITY_METER_TOKENIZER=chars/4, so the numbers hold whether or not @anthropic-ai/tokenizer is installed (issue #60).
+// Only the tokenizer test runs the command line without it, to check which tokenizer the output names.
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
@@ -37,7 +54,7 @@ import { fileURLToPath } from 'node:url';
 import { run as costModel } from './cost-model.mjs';
 import {
   callBill, defaultProjects, isBrevity, isClarification, isCorrection, meter as meterRecords, projectFolder, readPrice, render,
-  run, samePeer, similarity, transcripts, writeRate,
+  run, samePeer, similarity, tokenizer, transcripts, writeRate,
 } from './meter.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -52,7 +69,10 @@ const close = (a, b, eps = 1e-9) => assert.ok(Math.abs(a - b) <= eps * Math.max(
 const meter = (...args) => run(['--project', team, ...args], { count, cwd: dir });
 const session = (r, id) => r.team.sessions.find((s) => s.id === id);
 const messages = (s, dir_) => s.messages.filter((m) => m.dir === dir_);
-const cli = (...args) => spawnSync(process.execPath, [tool, '--project', team, ...args], { encoding: 'utf8', cwd: dir });
+// The command line, with chars/4 whatever is installed.
+const env = { ...process.env, BREVITY_METER_TOKENIZER: 'chars/4' };
+const node = (args, more = {}) => spawnSync(process.execPath, [tool, ...args], { encoding: 'utf8', cwd: dir, env, ...more });
+const cli = (...args) => node(['--project', team, ...args]);
 
 // The hub's calls, as the fixture writes them: [input, 5-minute writes, 1-hour writes, cache read, output].
 const HUB = [[10, 0, 1000, 3000, 80], [5, 100, 300, 4010, 40], [5, 0, 300, 4415, 30], [5, 0, 4800, 3000, 20],
@@ -144,6 +164,7 @@ test('sent, failed and received messages, with the estimated saving where each o
     sentBrevity: 2, sentLite: 0, sentTerse: 0, sentProse: 1, failed: 1, deliveredBrevity: 1, deliveredLite: 0, deliveredTerse: 0,
     deliveredProse: 1, delegations: 1, receivedBrevity: 1, receivedLite: 0, receivedTerse: 0, receivedProse: 0, subagentPrompts: 1,
     handbacks: 1, messageTokens: 50 + 40 + 100 + 60, brevityTokens: 50 + 100 + 60, delivered: 2, clarified: 0, corrected: 0, resent: 0,
+    delegationsStarted: 1, delegationsClarified: 0, delegationsCorrected: 0, delegationsResent: 0,
   });
   // The peer's first message is the hub's delegation prompt: written at its first call (5-minute, 1.25), read at
   // calls 2 and 3, gone at the resume.
@@ -294,18 +315,17 @@ test('the output is numbers and short ids; titles only with --titles, and never 
   assert.match(plain.stdout, /sent b\/p/, 'no lite or terse columns without lite or terse messages');
   assert.match(plain.stdout, /duplicated copies \(two or more in one context, issue #39\):\n {2}hub {2}2 copies/);
   assert.match(plain.stdout, /est\. saving is an estimate/);
-  assert.match(plain.stdout, /^tokenizer: /m);
+  assert.match(plain.stdout, /^tokenizer: chars\/4 \(BREVITY_METER_TOKENIZER=chars\/4\)$/m);
   assert.doesNotMatch(plain.stdout, /acme hub \(synthetic\)/);
   const titled = cli('--titles');
   assert.match(titled.stdout, /acme hub \(synthetic\)/);
-  if (/^tokenizer: chars\/4/m.test(plain.stdout)) assert.match(plain.stdout, /in the brevity checkout that holds this tool/);
   const json = cli('--json');
   assert.equal(json.status, 0, json.stderr);
   const parsed = JSON.parse(json.stdout);
   assert.equal(parsed.team.sessions.length, 3);
   assert.doesNotMatch(json.stdout, /rebase fix\/cart|Synthetic fixture text|acme hub/, 'no message text or title in --json');
   // --json gives 8-character ids and no message times; --titles gives the full ids and the times.
-  const lateJson = (...args) => JSON.parse(spawnSync(process.execPath, [tool, '--project', late, '--json', ...args], { encoding: 'utf8', cwd: dir }).stdout);
+  const lateJson = (...args) => JSON.parse(node(['--project', late, '--json', ...args]).stdout);
   const short = lateJson().team.sessions[0];
   assert.equal(short.id, '11111111');
   assert.equal(short.messages[0].ts, undefined);
@@ -315,9 +335,29 @@ test('the output is numbers and short ids; titles only with --titles, and never 
   const bad = cli('--since', 'yesterday');
   assert.equal(bad.status, 2);
   assert.match(bad.stderr, /--since must be an ISO time/);
-  const missing = spawnSync(process.execPath, [tool, '--project', join(dir, 'nowhere')], { encoding: 'utf8', cwd: dir });
+  const missing = node(['--project', join(dir, 'nowhere')]);
   assert.equal(missing.status, 2);
   assert.match(missing.stderr, /no such folder/);
+});
+
+test('BREVITY_METER_TOKENIZER=chars/4 counts with chars/4 whether or not the tokenizer is installed', async () => {
+  const forced = await tokenizer({ BREVITY_METER_TOKENIZER: 'chars/4' });
+  assert.deepEqual([forced.name, forced.forced, forced.count('abcde')], ['chars/4', true, 2]);
+  await assert.rejects(tokenizer({ BREVITY_METER_TOKENIZER: 'legacy' }), /BREVITY_METER_TOKENIZER must be chars\/4, or unset/);
+  // Unset or empty, the meter uses the tokenizer when it is installed, else chars/4 with the hint to install it.
+  const found = await tokenizer({});
+  assert.equal((await tokenizer({ BREVITY_METER_TOKENIZER: '' })).name, found.name);
+  assert.equal(JSON.parse(cli('--json').stdout).tokenizerForced, true);
+  const unset = { ...env };
+  delete unset.BREVITY_METER_TOKENIZER;
+  assert.equal(JSON.parse(node(['--project', team, '--json'], { env: unset }).stdout).tokenizerForced, false);
+  const plain = node(['--project', team], { env: unset });
+  assert.equal(plain.status, 0, plain.stderr);
+  if (found.name === 'chars/4') assert.match(plain.stdout, /^tokenizer: chars\/4 \(for the legacy counts, run npm i -D @anthropic-ai\/tokenizer in the brevity checkout that holds this tool\)$/m);
+  else assert.match(plain.stdout, /^tokenizer: @anthropic-ai\/tokenizer$/m);
+  const bad = node(['--project', team], { env: { ...env, BREVITY_METER_TOKENIZER: 'legacy' } });
+  assert.equal(bad.status, 2);
+  assert.match(bad.stderr, /BREVITY_METER_TOKENIZER must be chars\/4, or unset/);
 });
 
 test('a project with no transcripts folder says so', async () => {
@@ -385,6 +425,7 @@ test('a received message takes the arm and style of the sent message with the sa
     sentBrevity: 0, sentLite: 0, sentTerse: 1, sentProse: 0, failed: 0, deliveredBrevity: 0, deliveredLite: 0, deliveredTerse: 1,
     deliveredProse: 0, delegations: 0, receivedBrevity: 0, receivedLite: 1, receivedTerse: 0, receivedProse: 0, subagentPrompts: 0,
     handbacks: 0, messageTokens: 16 + 25, brevityTokens: 0, delivered: 1, clarified: 0, corrected: 0, resent: 0,
+    delegationsStarted: 0, delegationsClarified: 0, delegationsCorrected: 0, delegationsResent: 0,
   });
 });
 
@@ -442,7 +483,7 @@ test('--saving-ratio replaces the ratio of every arm, and off still saves nothin
 
 test('--team-json counts the messages that save, each at its own ratio', async () => {
   const file = join(dir, 'arms.json');
-  const res = spawnSync(process.execPath, [tool, '--project', armsDir, '--team-json', file], { encoding: 'utf8', cwd: dir });
+  const res = node(['--project', armsDir, '--team-json', file]);
   assert.equal(res.status, 0, res.stderr);
   // M4, written under off, is not one of them.
   assert.deepEqual(JSON.parse(readFileSync(file, 'utf8')).map((x) => [x.name, x.sent, x.received]), [
@@ -522,7 +563,7 @@ test('a clarification counts only within the window of the recipient\'s calls', 
   // Dev asks about Q1 and Q3 at the first call after each arrives, inside the smallest window.
   assert.equal((await quality('--clarify-window', '1')).team.total.clarified, 2);
   for (const bad of ['0', '2.5', 'soon']) {
-    const res = spawnSync(process.execPath, [tool, '--project', qualityDir, '--clarify-window', bad], { encoding: 'utf8', cwd: dir });
+    const res = node(['--project', qualityDir, '--clarify-window', bad]);
     assert.equal(res.status, 2, bad);
     assert.match(res.stderr, /--clarify-window must be a whole number of calls >= 1/);
   }
@@ -573,11 +614,95 @@ test('a received message is matched by text when its msg_id is not a send\'s, an
 });
 
 test('the signals leave no message text or session names in the output', async () => {
-  const json = spawnSync(process.execPath, [tool, '--project', qualityDir, '--json'], { encoding: 'utf8', cwd: dir });
+  const json = node(['--project', qualityDir, '--json']);
   assert.equal(json.status, 0, json.stderr);
   assert.doesNotMatch(json.stdout, /feat\/cart|tests\/cart|Correction|WITHDRAWN|runner|uds:|a1b2c3|"(?:text|peer|msgId|ord)"/);
-  const text = spawnSync(process.execPath, [tool, '--project', qualityDir], { encoding: 'utf8', cwd: dir });
+  const text = node(['--project', qualityDir]);
   assert.doesNotMatch(text.stdout, /feat\/cart|uds:|a1b2c3/);
   const records = await meterRecords(transcripts([qualityDir]), { count });
   for (const m of records.flatMap((x) => x.messages)) for (const key of ['text', 'peer', 'msgId', 'ord', 'hash']) assert.ok(!(key in m), key);
+});
+
+const delegationDir = join(here, 'fixtures', 'meter', 'delegation');
+const delegation = (...args) => run(['--project', delegationDir, ...args], { count, cwd: dir });
+// Each delegation prompt's signals, in order: "-" for none, "failed" for a spawn that failed.
+const delegationSignalsOf = (s) => messages(s, 'delegation-sent').map((m) => (m.failed ? 'failed'
+  : ['clarified', 'corrected', 'resent'].filter((k) => m[k]).join('+') || '-'));
+
+test('a delegation prompt starts the session whose first message it is: one each, the newest original sent before it', async () => {
+  const r = await delegation();
+  const coord = session(r, 'coord');
+  // D1 D2 D3 D4 D5 D5b D6 D7 D8 D9. D3 and D7 have the same text: s3 started before D7 was sent, s7 after. s5 takes
+  // D5, not D5b, which failed after it. s8 and s9 both started after D8 and D9: s8, first, takes the newer D9, and s9
+  // takes D8. s9b, which continues s9, keeps s9's prompt. s0 began with D2's text before D2 was sent: no prompt
+  // started it, and D2 is s2's.
+  assert.deepEqual(messages(coord, 'delegation-sent').map((m) => m.started),
+    [true, true, true, false, true, false, false, true, true, true]);
+  for (const id of ['s1', 's2', 's3', 's5', 's7', 's8', 's9']) assert.equal(messages(session(r, id), 'delegation-received').length, 1, id);
+  assert.deepEqual(messages(session(r, 's9b'), 'delegation-received').map((m) => [m.owned, m.counted]), [[false, false]]);
+  assert.equal(messages(session(r, 's0'), 'delegation-received').length, 0);
+  assert.equal(session(r, 's0').tally.receivedProse + session(r, 's0').tally.receivedTerse, 0);
+  // coord2's copies of D1, D2 and D3 are not owned: the originals in coord are the ones started and counted.
+  assert.deepEqual(messages(session(r, 'coord2'), 'delegation-sent').map((m) => [m.owned, m.counted, m.started]),
+    [[false, false, false], [false, false, false], [false, false, false]]);
+  // A spawn whose result is an error failed: it is neither sent nor a delegation prompt.
+  assert.deepEqual([coord.tally.failed, coord.tally.delegations, coord.tally.delegationsStarted], [2, 8, 7]);
+  assert.equal(coord.tally.sentTerse, 8 + 8, 'eight SendMessage deliveries and eight delegation prompts');
+});
+
+test('each delivered delegation prompt is clarified, corrected or resent by the rules; a failed spawn never is', async () => {
+  const r = await delegation();
+  // D1: s1 asks "Did you mean" 7 calls in; coord answers plainly, and coord2's correction counts on the original.
+  // D2: s2's question names D2's file, but only after coord wrote to it again. D3: s3's "Did you mean" goes to a third
+  // session and its question to coord asks leave; coord2 corrects it by D3's title, and its copy of D3 stands for the
+  // original although D7 has the same text. D5: coord2 writes to s5 before s5 asks, under coord's name. D6 repeats D1
+  // and started nothing, so coord's correction to D1's session after it is not D6's. D7 repeats D3; coord corrects s7
+  // by s7's own title, and that correction reaches s7, matched by its text, before s7 asks. D8: coord's correction,
+  // with no msg_id and addressed by the title D8 and D9 share, reaches s9b, which continues D8's session: it is
+  // matched by the transcript that received its text, so it is not D9's. D9 repeats D8.
+  assert.deepEqual(delegationSignalsOf(session(r, 'coord')),
+    ['clarified+corrected', '-', 'corrected', 'failed', '-', 'failed', 'resent', 'corrected+resent', 'corrected', 'resent']);
+  // No call window applies to a delegation prompt, whatever --clarify-window says.
+  assert.equal(delegationSignalsOf(session(await delegation('--clarify-window', '1'), 'coord'))[0], 'clarified+corrected');
+  const t = session(r, 'coord').tally;
+  assert.deepEqual([t.delegations, t.delegationsStarted, t.delegationsClarified, t.delegationsCorrected, t.delegationsResent], [8, 7, 1, 4, 3]);
+});
+
+test('the delegation signals are counted apart from the SendMessage ones, per arm and for the team', async () => {
+  const r = await delegation();
+  // The SendMessage signals: coord's correction after D6 corrects its answer to s1, s2's question clarifies coord's
+  // correction, which corrects coord's thanks, and s5's question clarifies what coord2 wrote to it. The prompts are
+  // not among them.
+  assert.deepEqual(signalsOf(session(r, 'coord')), ['corrected', 'corrected', 'clarified', '-', '-', '-', '-', '-']);
+  assert.deepEqual(signalsOf(session(r, 'coord2')), ['-', '-', 'clarified']);
+  const t = r.team.total;
+  assert.deepEqual([t.delivered, t.clarified, t.corrected, t.resent], [18, 2, 2, 0]);
+  assert.deepEqual([t.delegations, t.delegationsStarted, t.delegationsClarified, t.delegationsCorrected, t.delegationsResent], [8, 7, 1, 4, 3]);
+  assert.deepEqual(t.delegationPer100, { clarified: 12.5, corrected: 50, resent: 37.5 });
+  const a = r.team.arms;
+  assert.deepEqual(Object.keys(a), ['lite', 'terse', 'none']);
+  assert.deepEqual(['lite', 'terse', 'none'].map((k) => [a[k].delegations, a[k].delegationsStarted, a[k].delegationsClarified,
+    a[k].delegationsCorrected, a[k].delegationsResent]), [[0, 0, 0, 0, 0], [8, 7, 1, 4, 3], [0, 0, 0, 0, 0]]);
+  assert.equal(a.lite.delegationPer100, null, 'with no prompt, no rate');
+  assert.deepEqual([a.terse.delivered, a.terse.clarified, a.terse.corrected], [11, 2, 2]);
+  const text = render(r);
+  assert.match(text, /^delegation signals, heuristics, apart from the SendMessage ones: /m);
+  assert.match(text, /^arm +prompts +started +clarified +\/100 +corrected +\/100 +resent +\/100$/m);
+  assert.match(text, /^terse +8 +7 +1 +12\.5 +4 +50\.0 +3 +37\.5$/m);
+  assert.match(text, /^lite +0 +0 +0 +- +0 +- +0 +-$/m);
+  assert.match(text, /^team +8 +7 +1 +12\.5 +4 +50\.0 +3 +37\.5$/m);
+  assert.match(text, /^team +18 +2 +11\.1 +2 +11\.1 +0 +0\.0$/m, 'the SendMessage table');
+  assert.match(text, /no call window: a new session reads before it writes/);
+});
+
+test('the delegation signals leave no prompt text or session names in the output', async () => {
+  const json = node(['--project', delegationDir, '--json']);
+  assert.equal(json.status, 0, json.stderr);
+  assert.doesNotMatch(json.stdout, /cart|acme|Synthetic|uds:|"(?:text|peer|msgId|ord|hash|title|key)"/);
+  const text = node(['--project', delegationDir]);
+  assert.equal(text.status, 0, text.stderr);
+  assert.doesNotMatch(text.stdout, /cart|acme|Synthetic|uds:/);
+  const records = await meterRecords(transcripts([delegationDir]), { count });
+  for (const m of records.flatMap((x) => x.messages)) for (const key of ['text', 'peer', 'msgId', 'ord', 'hash', 'key']) assert.ok(!(key in m), key);
+  for (const x of records) assert.ok(!('first' in x));
 });
