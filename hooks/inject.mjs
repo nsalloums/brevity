@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // SessionStart hook: puts brevity's instructions for writing messages into the session context: by default the spec
-// and the project's dictionaries. Runs on startup, resume, clear and compact, so they survive context compaction.
+// and the project's dictionaries. Runs on startup, resume, fork, clear and compact, so they survive compaction.
 //
 // It does nothing unless the project opts in (see below).
 // Arms: what the hook loads comes from BREVITY_ARM if it is set, else from the nearest `.brevity/arm` file, which

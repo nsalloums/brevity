@@ -53,8 +53,9 @@ spec), with blind decoding and two independent audits:
 - **Not 50%.** Pushing harder dropped decision-relevant facts; about 28% of the text is identifiers, quotes and
   code that must stay as written.
 - **Worth it in busy sessions only.** The spec costs about 2.7k tokens per session. At a single pass's 37 tokens
-  saved per message, a session needs roughly 123-164 messages to come out ahead (76-101 at the audited 60): a
-  coordinator, not a peer that sends two.
+  saved per message, a 200-call session on Claude Opus 5.5 with 1-hour cache writes needs roughly 104-149 messages
+  to come out ahead (64-92 at the audited 60): a coordinator, not a peer that sends two. At 0.1x cache reads and
+  5-minute writes it needs 123-164 (76-101 at 60).
 
 The full method, the numbers per tokenizer and the break-even analysis are in [eval/RESULTS.md](eval/RESULTS.md).
 What counts as "decision-relevant" is defined in [eval/RUBRIC.md](eval/RUBRIC.md), written before the measurement
@@ -79,31 +80,35 @@ and revised once, after calibration.
 brevity saves tokens only when the sessions that load it exchange many messages each. The spec plus a small
 dictionary is about 3,200 tokens, and every session that loads them pays for them again on each model call it
 makes, as cache reads. A message written in one pass saves about 37 tokens (about 60 after the evaluation's
-audits), once in the sender's context and once in the recipient's. So a long session needs roughly 123 to 164
-messages before the spec pays for itself, or 76 to 101 at the audited saving (see
-[the break-even section](eval/RESULTS.md#break-even)), and a session that sends two never gets there.
+audits), once in the sender's context and once in the recipient's. So a 200-call session on Claude Opus 5.5
+needs roughly 104 to 149 messages before the spec pays for itself, or 64 to 92 at the audited saving (see
+[the break-even section](eval/RESULTS.md#break-even)), and a session that sends two never gets there. These counts
+leave out re-injections after compactions and resumes, idle cache misses and the plugin's skill entry, which all
+add cost.
 
 **Opting a project in is not enough.** A `.brevity/` folder loads the spec into every session of the project,
 busy or not, and in a hub-and-spoke team with short-lived peers that loses tokens overall. Take a synthetic team
 shaped like the evaluated one: a hub with 2,000 model calls and 268 messages, and 80 peers with 150 calls and 1 to
-14 messages each (median 2). Its net, in input-token equivalents:
+14 messages each (median 2). Its net, in input-token equivalents at Claude Opus 5.5's prices:
 
 | how the spec loads | net for the team |
 |---|---|
-| every session, from its start (a `.brevity/` folder) | -2,974,900 |
-| each session at its first message (the skill, on demand) | -1,926,684 |
-| the hub from its start, the peers at their first message | -1,901,291 |
-| the hub from its start; the peers a 300-token card that only reads (modeled, not in brevity) | +7,618 |
+| every session, from its start (a `.brevity/` folder) | -1,781,540 |
+| each session at its first message (the skill, on demand) | -1,272,802 |
+| the hub from its start, the peers at their first message | -1,259,916 |
+| the hub from its start; the peers a 300-token card that only reads (modeled, not in brevity) | -12,041 |
 
-The hub gains about 1.02 million, but each peer loses 43,000 to 51,000, because it carries the spec on every call
+The hub gains about 0.54 million, but each peer loses 24,000 to 30,000, because it carries the spec on every call
 to save on a handful of messages. For this team, not using brevity beats every way brevity can load today. The
-cost model finds that a read-only reader card of about 220 to 310 tokens would keep the team ahead: up to 309
-tokens under its default assumptions, and up to 218 if each peer's first message arrives at its first call. The
-300-token card in the table is near that limit: if each peer's first message arrives at its first call, or with
-1-hour cache writes, it loses tokens too. That is a modeled result under the assumptions the tool prints, not a shipped feature; brevity has no
-reader card, and [issue #11](https://github.com/nsalloums/brevity/issues/11) tracks the design. All of these
-figures use the audited 60 tokens per message. At a single pass's 37, every policy in the table loses tokens, and
-no reader card keeps this team ahead, even one of 0 tokens.
+cost model finds that a read-only reader card of about 210 to 280 tokens would keep the team ahead: up to 276
+tokens under its default assumptions, and up to 209 if each peer's first message arrives at its first call. The
+300-token card in the table is past that limit; it would come out ahead only with 5-minute cache writes, with no
+stub, or as a card that also writes. The
+plugin's skill entry and one re-injection per session lower the limit to 163 tokens. That is a modeled result
+under the assumptions the tool prints, not a shipped feature; brevity has no reader card, and
+[issue #11](https://github.com/nsalloums/brevity/issues/11) tracks the design. All of these figures use the audited
+60 tokens per message. At a single pass's 37, every policy in the table loses tokens, and no reader card keeps this
+team ahead, even one of 0 tokens.
 
 Opt a project in only when every session in it will be busy, such as a coordinator and a few long-lived sessions
 that trade hundreds of messages, and check your own team with [tools/cost-model.mjs](tools/cost-model.mjs) first.
@@ -131,9 +136,12 @@ node tools/cost-model.mjs docs/teams/hub.json --saving 60 --load-tokens 3200 --r
 ```
 
 The third line reproduces the table above from [docs/teams/hub.json](docs/teams/hub.json). The tool prints the
-tokens each session and the whole team save or lose, in input-token equivalents (output 5x, cache write 1.25x and
-cache read 0.1x an input token, as in Anthropic's API pricing; `--output`, `--write` and `--read` change them),
-under four policies: every session loads the spec, only hubs load it, each session loads it at its first message,
+tokens each session and the whole team save or lose, in input-token equivalents at Anthropic's prices. Output is
+5x an input token, and a cache write 2x, the 1-hour rate that Claude Code paid for every write measured in issue #11
+(`--write 1.25` for 5-minute caching). A cache read depends on `--model`: 0.05x on `claude-opus-5-5`, the default
+and the model of those measured calls, 0.025x on `claude-fable-5-1` and `claude-mythos-5-1`, and 0.1x on other
+models. `--output`, `--write` and `--read` override each price, and the output says which prices ran. It compares
+four policies: every session loads the spec, only hubs load it, each session loads it at its first message,
 and hubs always with the others at their first message. `--reader-tokens N` adds a fifth: hubs load the spec, and
 the other sessions load a reader card of N tokens that only decodes, and the output gives the largest card that
 would keep the team ahead. It also prints each session's break-even message count. The spec and your `.brevity/`
@@ -142,6 +150,13 @@ arrive, who writes to whom and a warm cache, are printed with the results. `--ro
 spec's verb table costs and, with your encodings, how often your traffic uses it; rarely used rows are flagged, not
 removed. The saving per message comes from `--saving`, or from your own messages and encodings (see
 [Measure it on your own traffic](#measure-it-on-your-own-traffic)).
+
+By default the model leaves out three costs, and options add them. Re-injection: the hook loads the spec again
+after each compaction and resume, as `--reinject N` extra copies per session or one every `--reinject-every N`
+calls. Idle cache misses: `--idle-misses R`, the share of calls that follow one. The plugin's entry in every
+session's skill listing: `--skill-entry 143`. Their defaults add nothing. For a team that already runs,
+[tools/meter.mjs](tools/meter.mjs) measures these costs from its transcripts, so use it rather than guessing the
+rates.
 
 ### Measure your own team
 
@@ -164,6 +179,29 @@ The saving is an estimate, because a real message has no prose original to compa
 from the single-pass pilot: brevity 0.154, lite 0.087 and terse 0.102. Messages written under off save nothing, and
 `--saving-ratio` replaces the other three. `--team-json team.json` writes your sessions in the cost model's format,
 and the output gives the command that compares the model with the measurement.
+
+Cost alone favours the smallest load, so the meter also counts three quality signals, per arm and for the team: the
+count and the rate per 100 delivered SendMessage messages. They are heuristics, read from the text of the messages
+and the replies around them. They miss some cases and flag others wrongly, so treat them as pointers to check by
+hand, not as a measure of loss. The rules were tuned on this project's own transcripts. On those, as of 2026-10-10,
+4 of the 5 corrections they flag are real (2 fix a mistake, 2 update an instruction; the fifth only uses the word),
+and they flag no clarification. That is an in-sample check, not a validation: nothing has measured them on other
+traffic yet. A delivered message is:
+
+- **clarified** when the recipient's next message to the sender, sent within its next 5 calls
+  (`--clarify-window`), asks about it. That reply asks a question with "did you mean", "which one", "unclear" or
+  "clarify", or a question that names something from the message (a `#N`, a SHA, a path, a file, a flag, a tag or a
+  quoted span). A question that asks leave for the recipient's own next step, such as "May I add x?", does not count.
+- **corrected** when the sender's next message to the same recipient corrects or retracts something it sent:
+  "correction", "I was wrong", a `FIX` line, or `-> WITHDRAWN`. An updated instruction counts too.
+- **resent** when the sender sends almost the same text to the same recipient again (a similarity of 0.8 or more)
+  without a reply in between.
+
+The meter matches each message to its recipient by the `msg_id` that both transcripts log, else by its text. When
+two sessions sent the same text, it uses the sender's name, and if that stays ambiguous the message flags nothing.
+It matches a reply to its addressee by name. A failed send never counts. Delegation prompts are not checked. The
+exact rules are in the header of [tools/meter.mjs](tools/meter.mjs). Like the rest of the output, the signals are
+numbers only: the meter never prints message text, and prints session titles only with `--titles`.
 
 ## Where it works
 
@@ -198,9 +236,9 @@ write brevity without being asked.
 The hook needs **Node.js 16.6 or later** on your `PATH`. The skill needs nothing.
 
 The hook does nothing until a project opts in: create a `.brevity/` folder at the project root (empty is fine), or
-set `BREVITY_ALWAYS=1`. Then, on startup, resume, `/clear` and compaction, it injects `SPEC.md`, then the nearest
-`.brevity/DICT.md` and `.brevity/DICT.local.md` found from the session's directory upwards. Git worktrees nested
-inside the main clone therefore pick up the main clone's dictionary. `BREVITY_DICT` can name extra files. On a
+set `BREVITY_ALWAYS=1`. Then, on startup, resume, fork, `/clear` and compaction, it injects `SPEC.md`, then the
+nearest `.brevity/DICT.md` and `.brevity/DICT.local.md` found from the session's directory upwards. Git worktrees
+nested inside the main clone therefore pick up the main clone's dictionary. `BREVITY_DICT` can name extra files. On a
 resume, the hook injects the current copy, and Claude Code itself keeps only the injected items whose text changed
 (observed on real resumes, not documented by Claude Code). A second copy therefore appears only when the copy's
 content changed, such as after a plugin update or a dictionary edit, which is what the session should load.
@@ -255,7 +293,7 @@ Copy `skills/brevity/` to `~/.agents/skills/brevity/` (Codex, Gemini CLI, Cursor
 
 ## What the plugin runs, reads and sends
 
-- **The hook.** On session start, resume, `/clear` and compaction, Claude Code runs
+- **The hook.** On session start, resume, fork, `/clear` and compaction, Claude Code runs
   `node "${CLAUDE_PLUGIN_ROOT}/hooks/inject.mjs" <k>` four times (k = 0 to 3), because each hook's output is capped
   at 10,000 characters. Each run reads the hook input that Claude Code passes on stdin, for the session's directory.
   It looks for each `.brevity/` path it uses (the folder, and the files listed below) in the session's directory and
@@ -272,7 +310,7 @@ Copy `skills/brevity/` to `~/.agents/skills/brevity/` (Codex, Gemini CLI, Cursor
     `BREVITY_ARM`.
 
   It prints the arm's marker and files as context for the session, in parts under the cap, on every session start,
-  resume, `/clear` and compaction.
+  resume, fork, `/clear` and compaction.
 - **What it never does.** No network requests, no file writes, no other files or variables read.
 - **The skill.** Claude reads `skills/brevity/SKILL.md` and `SPEC.md` from the plugin and, when they exist, the
   project's `.brevity/` dictionaries.
