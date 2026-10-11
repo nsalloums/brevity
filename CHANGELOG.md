@@ -3,6 +3,94 @@
 Every entry follows [RELEASING.md](RELEASING.md): a criticality level, why the release exists, what changed, the
 evidence, compatibility and upgrade steps. Versions follow semantic versioning read from the protocol's side.
 
+## [0.6.0] - 2026-10-10
+
+**Criticality:** normal. Two new surfaces measure on real work whether brevity pays: a meter that reads a team's own
+transcripts, and a per-project choice of what the hook loads.
+
+### Why
+
+- **#47, normal.** `tools/cost-model.mjs` predicts whether loading brevity pays, but nothing measured what it
+  actually cost and saved. A team had to list its sessions by hand, and the model assumed a warm cache, 5-minute
+  writes and one copy per session, which measured sessions break (#40).
+- **#49, normal.** The hook could load the full spec or nothing. The pilot in #26 measured lighter instructions
+  (a 167-token terse instruction ahead on the bill in every team shape tested, and a 333-token lite version that
+  lost the fewest facts), but none could be tried on real work.
+- **#39** is closed without a hook change. On a resume, Claude Code itself keeps only the hook items whose text
+  changed. The second copy that #39 measured was the 0.5 spec arriving after 0.4, which is the copy to load.
+
+### Changes
+
+- **Tools:**
+  - New `tools/meter.mjs` reads a project's local Claude Code transcripts and reports, per session, per arm and for
+    the team:
+    - the bill;
+    - each injected copy priced call by call: 1-hour and 5-minute writes, per-model read prices, idle-miss
+      rewrites, re-injections and duplicated copies;
+    - the messages sent and received;
+    - an estimated saving, labelled as an estimate;
+    - the net.
+  - It uses no network, writes only the `--team-json` file, and prints numbers and 8-character ids (titles only
+    with `--titles`). `--team-json` writes the team in `tools/cost-model.mjs`'s format, with the command that
+    compares the two (#47).
+- **Claude Code plugin:**
+  - An opted-in project picks what every session loads with `.brevity/arm` or `BREVITY_ARM`:
+
+    | arm | what each session loads |
+    |---|---|
+    | `brevity` | the spec and the dictionaries, as before; the default |
+    | `lite` | new `arms/lite.md`, 339 legacy tokens |
+    | `terse` | new `arms/terse.md`, 167 legacy tokens |
+    | `off` | the marker only |
+
+  - Every injection starts with `<!-- brevity arm: X -->`.
+  - The file is read in UTF-8 or UTF-16, as Windows PowerShell writes it.
+  - Projects without `.brevity/` still get nothing (#49).
+- **README:** the arms are documented. "What the plugin runs, reads and sends" adds `.brevity/arm`, `arms/*.md`
+  and the meter's reads, and states the lookup order for `.brevity/`. A new section, "Measure your own team",
+  covers the meter.
+
+### Evidence
+
+- **Meter.**
+  - On this project's own transcripts it matches the earlier private replay (#11) exactly on sessions, calls, bills
+    and copies, and within 0.11% on the spec's cost.
+  - Review found 7 defects, fixed before merge. One of them overstated the saving's share by about 19%.
+- **Hook.** The four `hooks.json` commands were run the way Claude Code runs them, from inside a temp folder per
+  arm, with the release commit as the plugin. Characters per part, the same on startup and on resume:
+  - brevity, and no arm file: 9,277 in part 0;
+  - lite: 1,461;
+  - terse: 759;
+  - off: 26;
+  - no `.brevity/`: nothing;
+  - no CR in any part.
+
+  Apart from its marker line, the brevity arm's output is identical to 0.5.1's.
+- **Review.** The first version skipped injection on resume when a copy was already there. Review showed that it
+  kept stale specs and dictionaries after an update or an edit, so it was removed.
+- **Real runs.** `claude plugin validate .` passes. A real `claude -p --plugin-dir` run, with a signed-in CLI and the
+  release commit as the plugin, saw:
+  - with `.brevity/`: the brevity marker followed by `<!-- brevity SPEC.md -->`;
+  - with `.brevity/arm` = terse: the terse marker followed by the terse instruction;
+  - without `.brevity/`: neither.
+
+  The skill `brevity:brevity` was available in all three.
+- **Spec size:** 99 lines, 9,221 characters, 2,680 legacy tokens; only the version in the title changes.
+- **Checks:** `node scripts/release-check.mjs --base origin/main` and `node tools/build-adapters.mjs --check` pass,
+  and so do the tools' tests (53).
+
+### Compatibility
+
+Every message written under 0.5 decodes the same: the spec changes only the version in its title. Projects that set
+nothing load what they loaded before, plus one marker line (30 characters).
+
+### Upgrade
+
+- **Claude Code plugin users:** run `/plugin marketplace update brevity`. To try a lighter instruction, write `lite`,
+  `terse` or `off` to `.brevity/arm` and start a new session. To see what it cost, run
+  `node /path/to/brevity/tools/meter.mjs` from the project's folder.
+- **Other surfaces:** projects that copy SPEC.md, the Cursor rule or the AGENTS.md block re-copy them.
+
 ## [0.5.1] - 2026-10-04
 
 **Criticality:** high. The README promised more than a session gets: a 25% saving with no known loss, and a
