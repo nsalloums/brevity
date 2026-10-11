@@ -7,9 +7,11 @@ evidence, compatibility and upgrade steps. Versions follow semantic versioning r
 
 Changes waiting on `next` for the next release (see [RELEASING.md](RELEASING.md)).
 
+- The README, eval/RESULTS.md and eval/RUBRIC.md link eval/METHOD.md, the reusable method, and RESULTS.md now says,
+  as METHOD.md does, that its holdout was not a sealed test (#27).
 - `tools/meter.mjs` flags delegation prompts as clarified, corrected or resent, in a table apart from the
-  SendMessage signals (#58), and `BREVITY_METER_TOKENIZER=chars/4` makes its tests pass with or without
-  `@anthropic-ai/tokenizer` installed (#60).
+  SendMessage signals, and counts a `spawn_task` whose result is an error as a failed send rather than a prompt
+  (#58). `BREVITY_METER_TOKENIZER=chars/4` makes its tests pass with or without `@anthropic-ai/tokenizer` (#60).
 
 ## [0.7.0] - 2026-10-11
 

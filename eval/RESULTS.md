@@ -36,8 +36,9 @@ saves less and loses more: see [Single writing pass](#single-writing-pass-pilot-
 - **Identifiers: 0 missing.** A deterministic check ([tools/idcheck.mjs](../tools/idcheck.mjs)) finds 2,637
   identifiers in the originals (SHAs, #N, file:line numbers, numbers >= 10, «quotes»), and all of them are in the
   encodings.
-- **The holdout behaves like the corpus** (23.8% vs 25.4%). Its 39 messages were written after the spec and the
-  dictionary, and nobody who designed them saw those messages.
+- **The holdout saved about as much as the corpus** (23.8% vs 25.4%), but it is not a sealed test. Its 39 messages
+  were written after the spec and the dictionary, then went through all nine passes with the rest while the spec
+  was revised between passes ([METHOD.md](METHOD.md#2-build-the-corpus)).
 - **It pays off only in busy sessions**: see [Break-even](#break-even).
 
 ### Single writing pass (pilot, 2026-10-04)
@@ -120,22 +121,19 @@ also counted with `o200k_base` (js-tiktoken) and with characters / 4:
 
 ## Method
 
-1. **Rubric first.** [RUBRIC.md](RUBRIC.md) fixes what "decision-relevant" means: identifiers, numbers,
-   statuses, owners, decision authors, order, conditions, requests, questions, corrections, warnings, quotes and
-   qualifiers. It was written before any measurement and revised once, after the 30-message calibration; its
-   Versions section says what changed and why. Every audit prompt quotes it in full.
-2. **Encode.** One agent per batch of 13-14 messages, with only the originals, SPEC.md and the dictionary. The
-   batches were interleaved, so no batch held a whole thread. Encoders had to pass the identifier check.
-3. **Blind decode.** A fresh agent that sees only SPEC.md, the dictionary and the encodings renders every
-   message in full plain English.
-4. **Audit through two lenses.** Independent agents compare the original, the gold facts and the blind decoding.
-   One lens covers identifiers and quantities, the other meaning and line 1. They report every lost, altered or
-   added fact with its rubric clause.
-5. **Skeptic.** A separate agent confirms or refutes each claimed decision-relevant loss. It may refute only by
-   quoting the decoded text, showing the fact is not in the original, or citing a MAY DROP clause. When uncertain,
-   it confirms.
-6. **Fix loop.** Confirmed losses are re-encoded, blind-decoded by a new agent, re-audited and re-verified.
-7. **Repeat full passes.** Each pass starts from the previous pass's fixed encodings. When a loss came from the
+[METHOD.md](METHOD.md) is the full method, written so that others can reuse it: each step, what to report, and
+the pitfalls met here. This run followed it:
+
+1. **Rubric first.** [RUBRIC.md](RUBRIC.md), written before any measurement and revised once, after the
+   30-message calibration. Every audit prompt quotes it in full.
+2. **Encode.** One agent per batch of 13-14 interleaved messages, with only the originals, SPEC.md and the
+   dictionary, gated by the identifier check.
+3. **Blind decode.** A fresh agent that sees only SPEC.md, the dictionary and the encodings.
+4. **Audit.** Two independent lenses, one for identifiers and quantities and one for meaning and line 1, then a
+   skeptic that may refute a claimed loss only with evidence, and confirms when uncertain
+   ([Audit](METHOD.md#5-audit)).
+5. **Fix loop.** Confirmed losses are re-encoded, blind-decoded by a new agent, re-audited and re-verified.
+6. **Repeat full passes.** Each pass starts from the previous pass's fixed encodings. When a loss came from the
    spec, the spec was clarified before a later pass, not after every pass. The text each pass ran on:
    - passes 1-3: 0.2 revisions 1-3; pass 3's text is the published one minus one clarifying clause;
    - pass 4: 0.2 as published (0.3 and 0.4 kept its text);
@@ -209,8 +207,9 @@ in with a `.brevity/` folder.
 
 - **One project and one coordinator.** Traffic with other habits, such as fewer ledger rituals or more free-form
   discussion, will compress differently.
-- **The dictionary author had read the corpus.** The holdout guards against overfitting to specific messages, but
-  not against the dictionary fitting this project's rituals well.
+- **The dictionary author had read the corpus.** A sealed holdout guards against overfitting to specific messages,
+  not against the dictionary fitting this project's rituals well, and this holdout was not sealed
+  ([Tuning bias](METHOD.md#tuning-bias)).
 - **Same model family.** Encoders, decoders, auditors and skeptics were all Claude agents. A decoder from another
   vendor was not tested.
 - **The auditors miss things.** Each new full pass found losses the previous one missed (157, 73, 48, 29, then

@@ -57,9 +57,10 @@ spec), with blind decoding and two independent audits:
   to come out ahead (64-92 at the audited 60): a coordinator, not a peer that sends two. At 0.1x cache reads and
   5-minute writes it needs 123-164 (76-101 at 60).
 
-The full method, the numbers per tokenizer and the break-even analysis are in [eval/RESULTS.md](eval/RESULTS.md).
+The numbers per tokenizer, the audit passes and the break-even analysis are in [eval/RESULTS.md](eval/RESULTS.md).
 What counts as "decision-relevant" is defined in [eval/RUBRIC.md](eval/RUBRIC.md), written before the measurement
-and revised once, after calibration.
+and revised once, after calibration. [eval/METHOD.md](eval/METHOD.md) writes up the method so that you can reuse
+it on any way of shortening agent messages.
 
 ## Rules that do not change
 
@@ -420,6 +421,9 @@ write their encodings as `[{"id": "m001", "enc": "..."}]`. `measure.mjs` counts 
 `@anthropic-ai/tokenizer` if it is installed, otherwise characters / 4). `idcheck.mjs` checks, deterministically,
 that every SHA, #N, file:line, number and «quote» of each original survives in its encoding. Keep real messages
 out of version control.
+
+To check that each fact still arrives, and to compare approaches on the same messages, follow
+[eval/METHOD.md](eval/METHOD.md).
 
 Other formats, research and tools for agent messages, and how brevity's approach differs from each, are listed in
 [eval/RELATED.md](eval/RELATED.md).
