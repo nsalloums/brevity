@@ -4,7 +4,8 @@
 //   node tools/cost-model.mjs [sessions.json] (--saving N | --messages messages.json --enc encodings.json)
 //        [--turns N] [--threshold N] [--first uniform|start] [--stub N] [--reader-tokens N [--reader-writes]]
 //        [--spec SPEC.md] [--dict DICT.md]... [--no-dict] [--load-tokens N]
-//        [--output 5] [--write 1.25] [--read 0.1] [--rows] [--rare 5] [--json]
+//        [--model claude-opus-5-5] [--output 5] [--write 2] [--read R]
+//        [--reinject N] [--reinject-every N] [--idle-misses R] [--skill-entry N] [--rows] [--rare 5] [--json]
 //
 // sessions.json: [{ "name": "hub", "turns": 2000, "sent": 158, "received": 110 }, ...]
 //   turns = model calls the session makes; sent, received = messages it exchanges with other sessions.
@@ -12,16 +13,39 @@
 // messages.json, encodings.json: the tools/measure.mjs format. The saving per message is their mean,
 //   tokens before minus tokens after; --saving gives it directly.
 //
-// Everything is in input-token equivalents: one uncached input token = 1, output 5, cache write 1.25,
-// cache read 0.1 (current Claude pricing; --output, --write and --read change them).
+// Everything is in input-token equivalents: one uncached input token = 1, output 5, cache write 2, and a cache
+// read at the price of --model: 0.05 on claude-opus-5-5, 0.025 on claude-fable-5-1 and claude-mythos-5-1, 0.1 on
+// any other model (Anthropic's prices, as tools/meter.mjs uses them). The default model is claude-opus-5-5, which
+// made every call measured in issue #11. The write price is the 1-hour rate, which Claude Code paid for every
+// cache write measured there; --write 1.25 gives 5-minute caching. --output, --write and --read override a price.
 //
-//   net = sum over messages m:  s_m x (output + write + read x R_sender(m) + read x R_receiver(m))
-//       - sum over sessions i:  (S + D) x (write + read x T_i)
+//   net = sum over messages m:  s_m x (output + write + r x R_sender(m) + r x R_receiver(m))
+//       - sum over sessions i:  (S + D + E) x (write x (1 + C_i) + r x T_i)
 //
 // s_m = tokens message m saves; R = model calls left in a session after the message; S + D = the spec
-// plus dictionary tokens; T_i = calls session i makes after it loads them. The sender's own cache write
+// plus dictionary tokens; E = the skill entry; T_i = calls session i makes after it loads them; C_i = its extra
+// copies; r = the read price, raised by idle misses (both below; 0 by default). The sender's own cache write
 // of the message is left out, as in eval/RESULTS.md. The sender's terms count towards the sender's
 // session and the recipient's towards the recipient's, which gives the net per session.
+//
+// Costs that the defaults leave out, each an option. tools/meter.mjs measures all of them, call by call, from a
+// team's own transcripts, so it is the tool for a real team:
+//   --reinject N        N extra copies per session (default 0): the hook loads the spec again after each
+//                       compaction and resume. A copy is one more cache write of what the session carries; the
+//                       compaction or resume drops the old copy, so the reads do not change. Copies fall evenly
+//                       over a session's calls, so one that loads at call F pays N x (T - F) / T of them.
+//   --reinject-every N  one extra copy at calls N, 2N, ... before a session's last call (default: none), as when
+//                       the context fills every N calls. A session pays those after the call at which it loads.
+//   --idle-misses R     the share of calls, 0 to 1, that follow an idle gap longer than the cache lifetime
+//                       (default 0: a warm cache). Such a call writes its whole prefix again, so loaded context
+//                       and carried messages alike cost r = read + R x (write - read) per call.
+//   --skill-entry N     the tokens of the plugin's entry in the skill listing (default 0; 143 in the legacy
+//                       count for the Claude Code plugin). The plugin lists the skill in every session, so each
+//                       session carries the entry from its first call under every policy, and net 0 means no
+//                       plugin. Where a policy carries the stub, the stub is that entry and counts once. The
+//                       break-even that makes a session a hub leaves the entry out, since a session pays it
+//                       loaded or not; the output adds the break-even against no plugin, with the entry.
+// Left out even then: a compaction or resume also drops messages before the session ends, which cuts the saving.
 //
 // S + D counts SPEC.md (this checkout's, or --spec) plus the nearest .brevity/DICT.md and
 // .brevity/DICT.local.md at or above the current directory, as the hook finds them (or the --dict
@@ -55,9 +79,21 @@ import { existsSync, readFileSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
-export const PRICES = { output: 5, write: 1.25, read: 0.1 };
+// Cache-read prices per model, by model id prefix, as in tools/meter.mjs; any other model reads at DEFAULT_READ.
+export const READ_PRICES = { 'claude-opus-5-5': 0.05, 'claude-fable-5-1': 0.025, 'claude-mythos-5-1': 0.025 };
+export const DEFAULT_READ = 0.1;
+export const DEFAULT_MODEL = 'claude-opus-5-5';
+export const SKILL_ENTRY = 143;
 export const STUB = 138;
 export const POLICIES = ['always-on', 'hub-only', 'first-message', 'hub+first'];
+export const EXTRAS = { reinject: 0, reinjectEvery: null, idleMisses: 0, skillEntry: 0 };
+
+export function readPrice(model) {
+  const key = Object.keys(READ_PRICES).find((k) => String(model ?? '').startsWith(k));
+  return key ? READ_PRICES[key] : DEFAULT_READ;
+}
+
+export const PRICES = { output: 5, write: 2, read: readPrice(DEFAULT_MODEL) };
 
 export async function tokenizer() {
   try {
@@ -70,9 +106,25 @@ export async function tokenizer() {
 
 const lf = (t) => t.replace(/\r\n/g, '\n');
 const readJson = (file) => JSON.parse(readFileSync(file, 'utf8'));
-// Tokens carried from a cache write through `calls` later calls.
-const carry = (tokens, calls, p) => tokens * (p.write + p.read * calls);
 const messages = (s) => s.sent + s.received;
+
+// What a token in context costs per call: the read price, or the write price on calls after an idle miss.
+const perCall = (p, x) => p.read + (x.idleMisses ?? 0) * (p.write - p.read);
+
+// Extra copies in a session with `turns` calls that loads at call `at`: its share of --reinject, and the calls
+// N, 2N, ... of --reinject-every that come after `at` and before its last call.
+export function copies(turns, at, x = EXTRAS) {
+  const spread = x.reinject && turns > 0 ? (x.reinject * (turns - at)) / turns : 0;
+  const N = x.reinjectEvery;
+  const every = N ? Math.max(0, Math.ceil(turns / N) - 1 - Math.floor(at / N)) : 0;
+  return spread + every;
+}
+
+// Tokens a session loads at call `at` and carries to its last call: written then and at each extra copy, and
+// read on every later call.
+export function held(tokens, turns, at, p = PRICES, x = EXTRAS) {
+  return tokens * (p.write * (1 + copies(turns, at, x)) + perCall(p, x) * (turns - at));
+}
 
 // The call at which a session's first message arrives, or null if it has none.
 export function firstCall(s, first = 'uniform') {
@@ -97,17 +149,19 @@ export function callsLeft(s, F) {
 }
 
 // What a session saves on `sent` and `received` of its messages, each `saving` tokens shorter.
-function saved(s, F, sent, received, saving, p) {
+function saved(s, F, sent, received, saving, p, x) {
   const n = messages(s);
   if (!n || F === null) return 0;
-  return saving * (sent * p.output + received * p.write + (p.read * callsLeft(s, F) * (sent + received)) / n);
+  return saving * (sent * p.output + received * p.write + (perCall(p, x) * callsLeft(s, F) * (sent + received)) / n);
 }
 
-// Messages a session with `turns` calls needs before the spec pays for itself, when it loads at its
-// first call and its messages are spread evenly (each carried for turns / 2 calls on average).
-export function breakEven({ load, saving, turns, sentShare, prices = PRICES }) {
-  const perMessage = saving * (sentShare * prices.output + (1 - sentShare) * prices.write + (prices.read * turns) / 2);
-  return perMessage > 0 ? Math.ceil(carry(load, turns, prices) / perMessage) : Infinity;
+// Messages a session with `turns` calls needs before the spec pays for itself, when it loads at its first call and
+// its messages are spread evenly (each carried for turns / 2 calls on average). With extras.skillEntry, the entry
+// counts too: that is the break-even against no plugin, not the marginal cost of loading.
+export function breakEven({ load, saving, turns, sentShare, prices = PRICES, extras }) {
+  const x = { ...EXTRAS, ...extras };
+  const perMessage = saving * (sentShare * prices.output + (1 - sentShare) * prices.write + (perCall(prices, x) * turns) / 2);
+  return perMessage > 0 ? Math.ceil(held(load + x.skillEntry, turns, 0, prices, x) / perMessage) : Infinity;
 }
 
 // Who sends how many messages to whom, estimated from each session's totals: iterative proportional
@@ -139,13 +193,18 @@ export function pairs(sessions, { iterations = 20000, tolerance = 0.01 } = {}) {
   return { m, converged };
 }
 
-// Net per session and per policy; with `reader` (tokens), also hub+reader.
+// Net per session and per policy; with `reader` (tokens), also hub+reader. `extras` holds the costs above that
+// the defaults leave out: { reinject, reinjectEvery, idleMisses, skillEntry }.
 export function model(sessions, {
-  load, saving, prices = PRICES, stub = STUB, first = 'uniform', threshold, reader, readerWrites = false,
+  load, saving, prices = PRICES, stub = STUB, first = 'uniform', threshold, reader, readerWrites = false, extras,
 } = {}) {
+  const x = { ...EXTRAS, ...extras };
   const used = reader === undefined ? POLICIES : [...POLICIES, 'hub+reader'];
   const sentShare = (s) => (messages(s) ? s.sent / messages(s) : 0.5);
-  const be = sessions.map((s) => breakEven({ load, saving, turns: s.turns, sentShare: sentShare(s), prices }));
+  // A hub's messages pay for loading the spec. The skill entry is no part of that: every session carries it, loaded
+  // or not.
+  const loading = { ...x, skillEntry: 0 };
+  const be = sessions.map((s) => breakEven({ load, saving, turns: s.turns, sentShare: sentShare(s), prices, extras: loading }));
   const hub = sessions.map((s, i) => messages(s) >= (threshold ?? be[i]));
   const { m, converged } = pairs(sessions);
   const rows = sessions.map((s, i) => {
@@ -172,11 +231,12 @@ export function model(sessions, {
     const net = {};
     const detail = {};
     for (const policy of used) {
-      // The policy sets when the session loads; its messages arrive when they arrive.
+      // The policy sets when the session loads; its messages arrive when they arrive. A session that does not
+      // carry the stub still carries the skill entry.
       const plan = plans[policy];
-      const cost = (plan.at === null ? 0 : carry(plan.tokens ?? load, s.turns - plan.at, prices))
-        + (plan.stub ? carry(stub, s.turns, prices) : 0);
-      const gain = plan.at === null ? 0 : saved(s, F, plan.sent, plan.received, saving, prices);
+      const cost = (plan.at === null ? 0 : held(plan.tokens ?? load, s.turns, plan.at, prices, x))
+        + held(plan.stub ? stub : x.skillEntry, s.turns, 0, prices, x);
+      const gain = plan.at === null ? 0 : saved(s, F, plan.sent, plan.received, saving, prices, x);
       net[policy] = gain - cost;
       detail[policy] = { loadsAt: plan.at, saved: gain, cost, savedMessages: plan.sent + plan.received };
     }
@@ -194,7 +254,7 @@ export function model(sessions, {
     // hub+reader's net falls by `perToken` for every token of the card; readerMax is where it reaches 0.
     const perToken = rows.reduce((a, r, i) => {
       const at = r.detail['hub+reader'].loadsAt;
-      return a + (hub[i] || at === null ? 0 : carry(1, r.turns - at, prices));
+      return a + (hub[i] || at === null ? 0 : held(1, r.turns, at, prices, x));
     }, 0);
     const atZero = policies[policies.length - 1].net + reader * perToken;
     const readerMax = perToken > 0 ? Math.max(0, atZero / perToken) : null; // null: no session loads the card
@@ -231,11 +291,12 @@ export function uses(enc, verb) {
     .some((part) => re.test(part.trim()));
 }
 
-export function rowReport(spec, count, { turns, prices = PRICES, encodings, rare = 5, sessions } = {}) {
+export function rowReport(spec, count, { turns, prices = PRICES, extras, encodings, rare = 5, sessions } = {}) {
+  const x = { ...EXTRAS, ...extras };
   return verbRows(spec).map(({ line, verbs }) => {
     const tokens = count(`${line}\n`);
-    const row = { verbs, tokens, perSession: carry(tokens, turns, prices) };
-    if (sessions?.length) row.team = sessions.reduce((a, s) => a + carry(tokens, s.turns, prices), 0);
+    const row = { verbs, tokens, perSession: held(tokens, turns, 0, prices, x) };
+    if (sessions?.length) row.team = sessions.reduce((a, s) => a + held(tokens, s.turns, 0, prices, x), 0);
     if (encodings) {
       const share = (hit) => (encodings.length ? (100 * encodings.filter(hit).length) / encodings.length : 0);
       row.used = share((e) => verbs.some((v) => uses(e.enc, v)));
@@ -258,7 +319,8 @@ function parseArgs(argv) {
   const opts = { dict: [] };
   const positional = [];
   const valued = ['--saving', '--messages', '--enc', '--turns', '--threshold', '--first', '--stub', '--spec', '--dict',
-    '--load-tokens', '--output', '--write', '--read', '--rare', '--reader-tokens'];
+    '--load-tokens', '--model', '--output', '--write', '--read', '--rare', '--reader-tokens', '--reinject', '--reinject-every',
+    '--idle-misses', '--skill-entry'];
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (valued.includes(a)) {
@@ -276,7 +338,13 @@ function parseArgs(argv) {
     if (!Number.isFinite(v) || v < min) throw new Error(`--${key} must be a number >= ${min}`);
     opts[key] = v;
   };
-  for (const key of ['saving', 'turns', 'threshold', 'stub', 'load-tokens', 'output', 'write', 'read', 'rare', 'reader-tokens']) num(key);
+  for (const key of ['saving', 'turns', 'threshold', 'stub', 'load-tokens', 'output', 'write', 'read', 'rare', 'reader-tokens',
+    'reinject', 'reinject-every', 'idle-misses', 'skill-entry']) num(key);
+  if (opts['reinject-every'] !== undefined && !(Number.isInteger(opts['reinject-every']) && opts['reinject-every'] > 0)) {
+    throw new Error('--reinject-every must be a whole number > 0');
+  }
+  if (opts['idle-misses'] > 1) throw new Error('--idle-misses is a share of calls, from 0 to 1');
+  if (opts.model !== undefined && !opts.model.trim()) throw new Error('--model needs a model id, such as claude-opus-5-5');
   if (opts['reader-writes'] && opts['reader-tokens'] === undefined) throw new Error('--reader-writes needs --reader-tokens');
   if (opts.first !== undefined && !['uniform', 'start'].includes(opts.first)) throw new Error('--first must be uniform or start');
   if (positional.length > 1) throw new Error(`one sessions file, got ${positional.join(', ')}`);
@@ -314,7 +382,19 @@ const table = (rows) => {
 export async function run(argv, { cwd = process.cwd() } = {}) {
   const o = parseArgs(argv);
   const tok = await tokenizer();
-  const prices = { output: o.output ?? PRICES.output, write: o.write ?? PRICES.write, read: o.read ?? PRICES.read };
+  const modelId = o.model ?? DEFAULT_MODEL;
+  const prices = { output: o.output ?? PRICES.output, write: o.write ?? PRICES.write, read: o.read ?? readPrice(modelId) };
+  // Where each price came from, for the output.
+  const priced = {
+    model: o.model === undefined ? 'default' : '--model',
+    output: o.output === undefined ? 'default' : '--output',
+    write: o.write === undefined ? 'default' : '--write',
+    read: o.read === undefined ? 'model' : '--read',
+  };
+  const extras = {
+    reinject: o.reinject ?? EXTRAS.reinject, reinjectEvery: o['reinject-every'] ?? EXTRAS.reinjectEvery,
+    idleMisses: o['idle-misses'] ?? EXTRAS.idleMisses, skillEntry: o['skill-entry'] ?? EXTRAS.skillEntry,
+  };
   const specFile = o.spec ?? join(dirname(fileURLToPath(import.meta.url)), '..', 'SPEC.md');
   const readSpec = () => lf(readFileSync(specFile, 'utf8'));
 
@@ -345,17 +425,19 @@ export async function run(argv, { cwd = process.cwd() } = {}) {
     throw new Error('give the saving per message: --saving N (eval/RESULTS.md measured 60), or --messages and --enc');
   }
   const turns = o.turns ?? (sessions?.length ? median(sessions.map((s) => s.turns)) : 200);
-  const result = { tokenizer: tok.name, prices, load, saving, turns };
+  const result = { tokenizer: tok.name, model: modelId, prices, priced, extras, load, saving, turns };
 
   if (saving) {
-    const at = (sentShare) => breakEven({ load: load.tokens, saving: saving.tokens, turns, sentShare, prices });
-    result.breakEven = { turns, allSent: at(1), allReceived: at(0), half: at(0.5) };
+    const at = (sentShare, e) => breakEven({ load: load.tokens, saving: saving.tokens, turns, sentShare, prices, extras: e });
+    const loading = { ...extras, skillEntry: 0 };
+    result.breakEven = { turns, allSent: at(1, loading), allReceived: at(0, loading), half: at(0.5, loading) };
+    if (extras.skillEntry) result.breakEvenNoPlugin = { allSent: at(1, extras), allReceived: at(0, extras), half: at(0.5, extras) };
   }
   if (sessions && saving) {
     const first = o.first ?? 'uniform';
     const r = model(sessions, {
       load: load.tokens, saving: saving.tokens, prices, stub: o.stub ?? STUB, first, threshold: o.threshold,
-      reader: o['reader-tokens'], readerWrites: !!o['reader-writes'],
+      reader: o['reader-tokens'], readerWrites: !!o['reader-writes'], extras,
     });
     result.stub = o.stub ?? STUB;
     result.first = first;
@@ -365,7 +447,7 @@ export async function run(argv, { cwd = process.cwd() } = {}) {
   }
   if (o.rows) {
     result.rare = o.rare ?? 5;
-    result.rows = rowReport(readSpec(), tok.count, { turns, prices, encodings, rare: result.rare, sessions });
+    result.rows = rowReport(readSpec(), tok.count, { turns, prices, extras, encodings, rare: result.rare, sessions });
     result.rowsEncodings = encodings?.length;
   }
   result.assumptions = [
@@ -376,7 +458,16 @@ export async function run(argv, { cwd = process.cwd() } = {}) {
     `${result.reader === undefined ? 'hub-only pairs' : 'hub-only and hub+reader pair'} messages in proportion to each`
       + ' session\'s sent and received totals, no session writing to itself; what the listed sessions cannot place'
       + ' among themselves goes to unlisted sessions',
-    'the cache stays warm: the spec is written once and read on every later call',
+    extras.idleMisses || extras.reinject || extras.reinjectEvery
+      ? 'loaded context is written when a session loads it and at each extra copy, and read on every later call;'
+        + ' carried messages are read the same way, and idle misses raise both to the write price on their share of calls'
+      : 'the cache stays warm and a session holds one copy: the spec is written once and read on every later call',
+    'messages stay in context to the end of the session: a compaction or resume that drops them sooner cuts the'
+      + ' saving, and is left out',
+    extras.skillEntry
+      ? 'the plugin lists the skill in every session: each carries the skill entry, or the stub in its place, and net 0'
+        + ' means no plugin'
+      : 'no skill entry: a session that loads nothing carries nothing',
     'the sender\'s own cache write of its message is left out, as in eval/RESULTS.md',
   ];
   if (result.reader !== undefined) {
@@ -388,10 +479,34 @@ export async function run(argv, { cwd = process.cwd() } = {}) {
   return result;
 }
 
+// Where the prices came from, and which of the costs the defaults leave out this run adds.
+function sources(r) {
+  const s = r.priced;
+  const read = s.read === '--read' ? 'cache read from --read'
+    : `cache read for ${r.model} (${s.model === 'default' ? 'the default; --model names another' : '--model'})`;
+  const write = s.write === '--write' ? 'cache write from --write' : 'cache write at the 1-hour rate (--write 1.25 for 5-minute caching)';
+  return `${read}, ${write}${s.output === '--output' ? ', output from --output' : ''}`;
+}
+
+function extraCosts(x) {
+  const n = (v) => String(+v.toFixed(3));
+  const reinject = x.reinject || x.reinjectEvery
+    ? [x.reinject ? `${n(x.reinject)} extra ${x.reinject === 1 ? 'copy' : 'copies'} per session (--reinject)` : '',
+      x.reinjectEvery ? `one extra copy every ${fmt(x.reinjectEvery)} calls (--reinject-every)` : ''].filter(Boolean).join(' and ')
+    : 'no re-injected copies (--reinject N per session, --reinject-every N calls)';
+  const idle = x.idleMisses ? `idle cache misses on ${n(100 * x.idleMisses)}% of calls (--idle-misses)` : 'no idle cache misses (--idle-misses R)';
+  const entry = x.skillEntry ? `a ${fmt(x.skillEntry)}-token skill entry in every session (--skill-entry)`
+    : `no skill entry (--skill-entry ${SKILL_ENTRY} for the Claude Code plugin)`;
+  return `${reinject}, ${idle}, ${entry}`;
+}
+
 export function render(r) {
   const out = [];
   const p = r.prices;
   out.push(`brevity cost model, in input-token equivalents (output ${p.output}x, cache write ${p.write}x, cache read ${p.read}x an input token)`);
+  out.push(`prices: ${sources(r)}`);
+  out.push(`extra costs: ${extraCosts(r.extras)}`);
+  out.push('tools/meter.mjs measures these costs from a team\'s own transcripts, call by call: for a real team, use it.');
   const parts = r.load.files.map((f) => `${basename(f.file)} ${fmt(f.tokens)}`).join(' + ');
   out.push(`loaded per session: ${fmt(r.load.tokens)} tokens${parts ? ` = ${parts} (${r.tokenizer})` : ' (--load-tokens)'}`);
   if (r.saving) {
@@ -402,6 +517,11 @@ export function render(r) {
     const b = r.breakEven;
     out.push('', `break-even for a session with ${fmt(b.turns)} calls that loads at its first call:`,
       `  ${fmt(b.allSent)} messages if it sends them all, ${fmt(b.allReceived)} if it receives them all, ${fmt(b.half)} half and half`);
+    const e = r.breakEvenNoPlugin;
+    if (e) {
+      out.push(`  against no plugin, counting the ${fmt(r.extras.skillEntry)}-token skill entry that every session carries: `
+        + `${fmt(e.allSent)} if it sends them all, ${fmt(e.allReceived)} if it receives them all, ${fmt(e.half)} half and half`);
+    }
   }
   if (r.policies) {
     const n = r.sessions.length;
@@ -446,7 +566,7 @@ export function render(r) {
   if (r.rows) {
     const total = r.rows.reduce((a, x) => a + x.tokens, 0);
     const spec = r.load.files[0]?.tokens;
-    out.push('', `SPEC.md verb table: ${r.rows.length} rows, ${fmt(total)} tokens${spec ? ` (${pct((100 * total) / spec)} of SPEC.md)` : ''}; per session = tokens x ${+(p.write + p.read * r.turns).toFixed(2)} at ${fmt(r.turns)} calls`);
+    out.push('', `SPEC.md verb table: ${r.rows.length} rows, ${fmt(total)} tokens${spec ? ` (${pct((100 * total) / spec)} of SPEC.md)` : ''}; per session = tokens x ${+held(1, r.turns, 0, p, r.extras).toFixed(2)} at ${fmt(r.turns)} calls`);
     const head = ['row', 'tokens', 'per session', ...(r.rows[0]?.team !== undefined ? ['team, always-on'] : []), ...(r.rowsEncodings !== undefined ? ['used in', ''] : [])];
     out.push(table([head, ...r.rows.map((x) => [
       x.verbs.join(' / '), fmt(x.tokens), fmt(x.perSession),
