@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // brevity meter: what brevity cost and saved in a project's real Claude Code sessions, read from their transcripts.
 //
-//   node tools/meter.mjs [--project <dir>]... [--since <ISO time>] [--until <ISO time>] [--saving-ratio 0.154]
+//   node tools/meter.mjs [--project <dir>]... [--since <ISO time>] [--until <ISO time>] [--saving-ratio <r>]
 //        [--input 1] [--output 5] [--write-5m 1.25] [--write-1h 2] [--read <r>]
 //        [--titles] [--json] [--team-json <file>]
 //
@@ -25,9 +25,13 @@
 //   transcript (a session continued under a new id copies part of the old one) counts only in the transcript that
 //   started first. --since and --until limit the calls counted; the whole file is still read, to follow its state.
 // - Sessions. Transcripts whose entrypoint starts with "sdk" (claude -p) are tests, reported apart from the team.
-// - Spec copies. A SessionStart hook injection whose text holds "<!-- brevity SPEC.md -->" is one copy of the spec
-//   and the dictionaries injected with it, and costs the tokens of its rendered text. The plugin's "brevity:brevity"
-//   line in a skill listing is counted the same way, as the skill entry.
+// - Copies. A SessionStart hook injection that holds "<!-- brevity arm: <arm> -->" is one copy of that arm: for
+//   brevity the spec and the dictionaries injected with it, for lite and terse their instructions, for off the marker
+//   alone. One that holds "<!-- brevity SPEC.md -->" and no arm marker, from before arms, is a brevity copy. A copy
+//   costs the tokens of its rendered text. The plugin's "brevity:brevity" line in a skill listing is counted the same
+//   way, as the skill entry; spec cost, or load cost per arm, is the copies plus the skill entry.
+// - Arms. A session is under the arm of the last copy that one of its calls carried (else its last copy), or none.
+//   The per-arm summary adds up the sessions under each arm.
 // - Cost of a copy, call by call. While a copy is in a session's context, each call bills it at the cache read price
 //   if the call's cache read reaches past the copy's end in the prompt, and at the call's write rate otherwise: its
 //   first call, a call after an idle cache miss, or a rebuilt prefix. The write rate is the call's own mix of 5-minute
@@ -48,15 +52,19 @@
 //   (mcp__ccd_session__spawn_task). Received: messages from a peer (origin.kind "peer"), logged as user lines or, when
 //   they arrive while the session is busy, as queued_command attachments, and counted once per msg_id; and a
 //   delegation prompt that is a session's first message. Peer messages with handback true are subagent results, and
-//   Agent tool prompts go to subagents: both are counted apart. A message is brevity when a line after its first
-//   starts with a SPEC.md section 3 verb (DO, NO, REPLY, ASK, ASKn, An, WILL, DONE, IF, HOLD, GO, DEC, FIX, WARN, WHY,
-//   CHK, FILES, OWN, TELL, ORDER, NUM, HDR, MERGED, READY, ACK); otherwise it is prose.
-// - Savings, an estimate. No prose original exists for a real message, so a brevity message of t tokens is taken to
-//   replace prose of t / (1 - r) tokens, r = --saving-ratio (default 0.154: the single-pass pilot in eval/RESULTS.md),
-//   and to save s = t x r / (1 - r). The sender saves s x output when it writes the message; then the sender and the
-//   receiver each save s x the rate of every call that carries the message, priced like a copy: the write rate where
-//   the call writes it to the cache (the receiver's first call, the sender's next call, idle misses), the read price
-//   elsewhere. Unlike tools/cost-model.mjs, this includes the sender's own cache write.
+//   Agent tool prompts go to subagents: both are counted apart. A message is written under the arm of the newest copy
+//   in the sender's context. Under lite and terse, every message is that arm's. Otherwise a message is brevity when a
+//   line after its first starts with a SPEC.md section 3 verb (DO, NO, REPLY, ASK, ASKn, An, WILL, DONE, IF, HOLD, GO,
+//   DEC, FIX, WARN, WHY, CHK, FILES, OWN, TELL, ORDER, NUM, HDR, MERGED, READY, ACK), and prose if not. A received
+//   message takes the arm and style of the sent message with the same text, when a measured transcript sent it.
+// - Savings, an estimate. No prose original exists for a real message, so a message of t tokens is taken to replace
+//   prose of t / (1 - r) tokens and to save s = t x r / (1 - r). r is the ratio of its style, from the single-pass
+//   pilot in issue #26: brevity 0.154, lite 0.087, terse 0.102. Prose, and every message written under off, save
+//   nothing. --saving-ratio replaces the brevity, lite and terse ratios. The sender saves s x output when it writes
+//   the message; then the sender and the receiver each save s x the rate of every call that carries the message,
+//   priced like a copy: the write rate where the call writes it to the cache (the receiver's first call, the sender's
+//   next call, idle misses), the read price elsewhere. Unlike tools/cost-model.mjs, this includes the sender's own
+//   cache write.
 //
 // Token counts use @anthropic-ai/tokenizer, the legacy tokenizer behind eval/RESULTS.md's counts, when it is installed
 // where this file can import it: run npm i -D @anthropic-ai/tokenizer in the brevity checkout that holds this tool,
@@ -72,9 +80,13 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 export const PRICES = { input: 1, output: 5, write5m: 1.25, write1h: 2 };
 export const READ_PRICES = { 'claude-opus-5-5': 0.05, 'claude-fable-5-1': 0.025, 'claude-mythos-5-1': 0.025 };
 export const DEFAULT_READ = 0.1;
-export const SAVING_RATIO = 0.154;
+// The share of a prose message's tokens that each arm's style saves, from the single-pass pilot in issue #26.
+export const SAVING_RATIOS = { brevity: 0.154, lite: 0.087, terse: 0.102, off: 0 };
+export const SAVING_RATIO = SAVING_RATIOS.brevity;
+export const ARMS = Object.keys(SAVING_RATIOS);
 const VERB_LINE = /^\s*(?:[-*]\s+|\d+\.\s+)?(?:@\S+\s+)?(?:DO|NO|REPLY|ASK\d*|A\d+|WILL|DONE|IF|HOLD|GO|DEC|FIX|WARN|WHY|CHK|FILES|OWN|TELL|ORDER|NUM|HDR|MERGED|READY|ACK)(?=[\s:;]|$)/;
 const SPEC_MARK = '<!-- brevity SPEC.md';
+const ARM_MARK = /<!-- brevity arm: (\w+) -->/;
 const SKILL_ENTRY = /(?:^|\n)(- brevity:brevity\b[^\n]*(?:\n(?!- )[^\n]*)*)/;
 const DELEGATION = /(?:^|__)spawn_task$/;
 
@@ -229,6 +241,12 @@ class Transcript {
     this.drops = { compaction: 0, compact: 0, clear: 0, resume: 0 };
   }
 
+  // The arm of the newest copy still in context: what a message written now is written under.
+  arm() {
+    for (let i = this.items.length - 1; i >= 0; i--) if (this.items[i].kind === 'spec' && !this.items[i].dropped) return this.items[i].arm;
+    return null;
+  }
+
   feed(o) {
     if (o.uuid && o.parentUuid !== undefined) this.parents.set(o.uuid, o.parentUuid);
     if (o.entrypoint && !this.entrypoint) this.entrypoint = o.entrypoint;
@@ -377,9 +395,10 @@ class Transcript {
   message(dir, text, key, o, counted) {
     const t = str(text);
     const owned = this.claim(this.ctx.lines, key);
+    // What this session writes is written under its arm; what it receives, under the sender's (see settle).
     return this.add({
       kind: 'msg', dir, owned, counted: owned && counted, tokens: this.ctx.count(t), brevity: isBrevity(t), hash: hash(t),
-      outputRate: 0, failed: false,
+      arm: WRITTEN.includes(dir) ? this.arm() : null, outputRate: 0, failed: false,
     }, o);
   }
 
@@ -433,14 +452,18 @@ class Transcript {
     const { count } = this.ctx;
     const others = parts.filter((x) => !x.includes('<!-- brevity')).reduce((s, x) => s + count(x), 0);
     const tokens = rendered ? Math.max(0, count(rendered) - others) : ours.reduce((s, x) => s + count(x), 0);
-    const spec = ours.filter((x) => x.includes(SPEC_MARK)).reduce((s, x) => s + count(x), 0);
-    const dict = ours.filter((x) => !x.includes(SPEC_MARK)).reduce((s, x) => s + count(x), 0);
+    // `spec` counts the arm's own text (with its marker), `dict` the dictionaries injected with it.
+    const own = (x) => ARM_MARK.test(x) || x.includes(SPEC_MARK);
+    const spec = ours.filter(own).reduce((s, x) => s + count(x), 0);
+    const dict = ours.filter((x) => !own(x)).reduce((s, x) => s + count(x), 0);
+    const arm = ours.map((x) => x.match(ARM_MARK)?.[1]).find(Boolean);
     // Parts of one SessionStart that arrive as separate attachments, seconds apart and before any call, are one copy.
+    // Only part 0 carries the arm marker, so a marker always starts a copy.
     const last = this.pending.find((p) => p.item.kind === 'spec');
-    if (last && Math.abs(Date.parse(o.timestamp) - Date.parse(last.item.ts)) < 10000) {
+    if (!arm && last && Math.abs(Date.parse(o.timestamp) - Date.parse(last.item.ts)) < 10000) {
       Object.assign(last.item, { tokens: last.item.tokens + tokens, spec: last.item.spec + spec, dict: last.item.dict + dict });
       last.after = 0;
-    } else if (spec) this.add({ kind: 'spec', tokens, spec, dict, owned: this.claim(this.ctx.lines, o.uuid) }, o);
+    } else if (spec) this.add({ kind: 'spec', arm: arm ?? 'brevity', tokens, spec, dict, owned: this.claim(this.ctx.lines, o.uuid) }, o);
   }
 
   user(o) {
@@ -465,13 +488,13 @@ class Transcript {
     }
   }
 
-  result(prices, ratio) {
+  result(prices) {
     const calls = [...this.calls.values()].filter((c) => c.counted);
     const bill = calls.reduce((a, c) => a + callBill(c.usage, c.model, prices), 0);
     const billLoaded = calls.filter((c) => c.loaded).reduce((a, c) => a + callBill(c.usage, c.model, prices), 0);
     const cost = (kind, key = 'rate') => this.items.filter((i) => i.kind === kind).reduce((a, i) => a + i.tokens * i[key], 0);
-    const copies = this.items.filter((i) => i.kind === 'spec' && i.billed);
-    const s = (i) => (i.brevity ? (i.tokens * ratio) / (1 - ratio) : 0);
+    const all = this.items.filter((i) => i.kind === 'spec');
+    const copies = all.filter((i) => i.billed);
     const msgs = this.items.filter((i) => i.kind === 'msg' && i.dir !== 'first');
     const models = {};
     for (const c of calls) models[c.model] = (models[c.model] ?? 0) + 1;
@@ -481,6 +504,9 @@ class Transcript {
       id: this.id,
       kind: this.kind === 'subagent' ? 'subagent' : /^sdk/.test(this.entrypoint ?? '') ? 'test' : 'team',
       title: this.titles.custom ?? this.titles.ai ?? null,
+      // The arm of the last copy a call carried (else the last copy), and every arm the session had, in order.
+      arm: (copies.at(-1) ?? all.at(-1))?.arm ?? 'none',
+      arms: [...new Set(all.map((i) => i.arm))],
       calls: calls.length,
       callsLoaded: calls.filter((c) => c.loaded).length,
       bill,
@@ -490,7 +516,7 @@ class Transcript {
       writes1h: written.reduce((a, w) => a + w.w1h, 0),
       copies: copies.filter((i) => i.owned).length,
       inheritedCopies: copies.filter((i) => !i.owned).length,
-      copyTokens: copies.filter((i) => i.owned).map((i) => ({ tokens: i.tokens, spec: i.spec, dict: i.dict })),
+      copyTokens: copies.filter((i) => i.owned).map((i) => ({ arm: i.arm, tokens: i.tokens, spec: i.spec, dict: i.dict })),
       copyCost: cost('spec'),
       skillCost: cost('skill'),
       copyCostLoaded: cost('spec', 'rateLoaded'),
@@ -499,9 +525,10 @@ class Transcript {
       rewriteCost: rewrites.reduce((a, i) => a + i.tokens * i.rewriteRate, 0),
       drops: this.drops,
       duplicates: this.dups.map((d) => ({ ...d })),
+      // The rates and the hash are settled into each message's style and saving, then removed (see settle).
       messages: msgs.map((i) => ({
-        dir: i.dir, owned: i.owned, counted: i.counted, brevity: i.brevity, tokens: i.tokens, failed: i.failed,
-        saving: s(i) * (i.rate + i.outputRate), savingLoaded: s(i) * (i.rateLoaded + i.outputRateLoaded),
+        dir: i.dir, owned: i.owned, counted: i.counted, brevity: i.brevity, arm: i.arm, tokens: i.tokens, failed: i.failed,
+        rate: i.rate, outputRate: i.outputRate, rateLoaded: i.rateLoaded, outputRateLoaded: i.outputRateLoaded,
         callIndex: i.callIndex ?? null, ts: i.ts, hash: i.hash,
       })),
       first: this.firstHuman ? {
@@ -514,7 +541,7 @@ class Transcript {
 }
 
 // Reads every transcript and returns one record per transcript; see the header for what each number means.
-export async function meter(sources, { count, prices = PRICES, ratio = SAVING_RATIO, since, until } = {}) {
+export async function meter(sources, { count, prices = PRICES, ratios = SAVING_RATIOS, since, until } = {}) {
   const ctx = { count, prices, since, until, calls: new Set(), lines: new Set() };
   const ordered = [];
   for (const s of sources) ordered.push({ ...s, first: s.kind === 'session' ? await firstTimestamp(s.file) : '9999' });
@@ -531,39 +558,65 @@ export async function meter(sources, { count, prices = PRICES, ratio = SAVING_RA
       else main.feed(o);
     }
     for (const t of side ? [main, side] : [main]) {
-      const r = t.result(prices, ratio);
+      const r = t.result(prices);
       r.parent = s.parent ?? (t === side ? id : null);
       records.push(r);
     }
   }
-  settleDelegations(records, ratio);
+  settle(records, ratios);
   return records;
-}
-
-// A session's first message is a received delegation prompt when it equals one that a session sent.
-function settleDelegations(records, ratio) {
-  const sent = new Map();
-  for (const r of records) for (const m of r.messages) if (m.dir === 'delegation-sent') sent.set(m.hash, m);
-  for (const r of records) {
-    const f = r.first;
-    const hit = f?.candidates.find((c) => sent.has(c.hash));
-    if (hit) {
-      const brevity = isBrevity(hit.text);
-      const tokens = sent.get(hit.hash).tokens;
-      const s = brevity ? (tokens * ratio) / (1 - ratio) : 0;
-      r.messages.push({
-        dir: 'delegation-received', owned: f.owned, counted: f.counted, brevity, tokens, failed: false, saving: s * f.rate,
-        savingLoaded: s * f.rateLoaded, callIndex: f.callIndex, ts: f.ts,
-      });
-    }
-    // Keep numbers only: no message text or fingerprints leave this function.
-    delete r.first;
-    for (const m of r.messages) delete m.hash;
-  }
 }
 
 const SENT = ['sent', 'delegation-sent'];
 const RECEIVED = ['received', 'delegation-received'];
+// What a session writes itself, under its own arm.
+const WRITTEN = [...SENT, 'subagent-prompt'];
+// A message that the estimate counts as compressed: written in brevity, lite or terse, and not under off.
+const compressed = (m) => m.style !== 'prose' && m.arm !== 'off';
+
+// Each message's style (brevity, lite, terse or prose), ratio and estimated saving. A received message takes the arm
+// and style of the sent message with the same text, and a session's first message is a received delegation prompt
+// when it equals one that a session sent.
+function settle(records, ratios) {
+  const style = (m) => (m.arm === 'lite' || m.arm === 'terse' ? m.arm : m.brevity ? 'brevity' : 'prose');
+  const sent = new Map();
+  const delegated = new Map();
+  for (const r of records) {
+    for (const m of r.messages) {
+      if (!WRITTEN.includes(m.dir)) continue;
+      m.style = style(m);
+      if (m.dir === 'sent') sent.set(m.hash, m);
+      if (m.dir === 'delegation-sent') delegated.set(m.hash, m);
+    }
+  }
+  for (const r of records) {
+    for (const m of r.messages) {
+      if (WRITTEN.includes(m.dir)) continue;
+      const from = m.dir === 'received' ? sent.get(m.hash) : undefined;
+      m.arm = from?.arm ?? null;
+      m.style = from?.style ?? style(m);
+    }
+    const f = r.first;
+    const hit = f?.candidates.find((c) => delegated.has(c.hash));
+    if (hit) {
+      const from = delegated.get(hit.hash);
+      r.messages.push({
+        dir: 'delegation-received', owned: f.owned, counted: f.counted, brevity: isBrevity(hit.text), arm: from.arm,
+        style: from.style, tokens: from.tokens, failed: false, rate: f.rate, outputRate: 0, rateLoaded: f.rateLoaded,
+        outputRateLoaded: 0, callIndex: f.callIndex, ts: f.ts,
+      });
+    }
+    for (const m of r.messages) {
+      m.ratio = compressed(m) ? ratios[m.style] : 0;
+      const s = (m.tokens * m.ratio) / (1 - m.ratio);
+      m.saving = s * (m.rate + m.outputRate);
+      m.savingLoaded = s * (m.rateLoaded + m.outputRateLoaded);
+      // Keep numbers only: no message text or fingerprints leave this function.
+      for (const key of ['rate', 'outputRate', 'rateLoaded', 'outputRateLoaded', 'hash']) delete m[key];
+    }
+    delete r.first;
+  }
+}
 
 function tally(r) {
   const ms = r.messages.filter((m) => m.counted);
@@ -571,19 +624,27 @@ function tally(r) {
   const delivered = (m) => !m.failed;
   const sent = of(SENT, delivered);
   const received = of(RECEIVED);
+  const styled = (list, style) => list.filter((m) => m.style === style).length;
+  const deliveries = of(['sent'], delivered);
   return {
-    sentBrevity: sent.filter((m) => m.brevity).length,
-    sentProse: sent.filter((m) => !m.brevity).length,
+    sentBrevity: styled(sent, 'brevity'),
+    sentLite: styled(sent, 'lite'),
+    sentTerse: styled(sent, 'terse'),
+    sentProse: styled(sent, 'prose'),
     failed: of(['sent'], (m) => m.failed).length,
-    deliveredBrevity: of(['sent'], (m) => delivered(m) && m.brevity).length,
-    deliveredProse: of(['sent'], (m) => delivered(m) && !m.brevity).length,
+    deliveredBrevity: styled(deliveries, 'brevity'),
+    deliveredLite: styled(deliveries, 'lite'),
+    deliveredTerse: styled(deliveries, 'terse'),
+    deliveredProse: styled(deliveries, 'prose'),
     delegations: of(['delegation-sent']).length,
-    receivedBrevity: received.filter((m) => m.brevity).length,
-    receivedProse: received.filter((m) => !m.brevity).length,
+    receivedBrevity: styled(received, 'brevity'),
+    receivedLite: styled(received, 'lite'),
+    receivedTerse: styled(received, 'terse'),
+    receivedProse: styled(received, 'prose'),
     subagentPrompts: of(['subagent-prompt']).length,
     handbacks: of(['handback']).length,
     messageTokens: [...sent, ...received].reduce((a, m) => a + m.tokens, 0),
-    brevityTokens: [...sent, ...received].filter((m) => m.brevity).reduce((a, m) => a + m.tokens, 0),
+    brevityTokens: [...sent, ...received].filter((m) => m.style === 'brevity').reduce((a, m) => a + m.tokens, 0),
   };
 }
 
@@ -598,17 +659,44 @@ function summarize(records) {
     specCostLoaded: sum('specCostLoaded'), savingLoaded: sum('savingLoaded'), netLoaded: sum('netLoaded'),
   };
   for (const key of Object.keys(t[0] ?? {})) out[key] = tsum(key);
-  // Each share divides what the calls with brevity loaded billed for it by what those same calls billed in all.
+  // Each share divides what the calls with an arm loaded billed for it by what those same calls billed in all.
   const b = out.billLoaded;
   out.shareOfLoadedBill = b ? { specCost: out.specCostLoaded / b, saving: out.savingLoaded / b, net: out.netLoaded / b } : null;
   return out;
 }
 
-// The cost-model sessions file: calls and brevity messages from the session's first spec copy on.
+// The sessions under each arm (the arm of each one's last copy, or none) and what they add up to. Each share divides
+// by the bill of the arm's sessions.
+export function perArm(sessions, ratios) {
+  const arms = {};
+  const order = [...ARMS, 'none'];
+  for (const r of [...sessions].sort((a, b) => (order.indexOf(a.arm) + 1 || 99) - (order.indexOf(b.arm) + 1 || 99))) {
+    const t = r.tally;
+    const a = (arms[r.arm] ??= {
+      ratio: r.arm in ratios ? ratios[r.arm] : null, sessions: [], calls: 0, bill: 0, loadCost: 0, sent: 0, received: 0,
+      compressed: 0, saving: 0, net: 0,
+    });
+    a.sessions.push(r.id);
+    a.calls += r.calls;
+    a.bill += r.bill;
+    a.loadCost += r.specCost;
+    a.sent += t.sentBrevity + t.sentLite + t.sentTerse + t.sentProse;
+    a.received += t.receivedBrevity + t.receivedLite + t.receivedTerse + t.receivedProse;
+    a.compressed += r.messages.filter((m) => m.counted && !m.failed && [...SENT, ...RECEIVED].includes(m.dir) && compressed(m)).length;
+    a.saving += r.saving;
+    a.net += r.net;
+  }
+  for (const a of Object.values(arms)) {
+    a.shareOfBill = a.bill ? { loadCost: a.loadCost / a.bill, saving: a.saving / a.bill, net: a.net / a.bill } : null;
+  }
+  return arms;
+}
+
+// The cost-model sessions file: calls and compressed messages from the session's first copy on.
 export function teamSessions(team) {
   return team.map((r) => {
     const start = r.loadStart ?? 0;
-    const ms = r.messages.filter((m) => m.counted && m.brevity && !m.failed && (m.callIndex ?? start) >= start);
+    const ms = r.messages.filter((m) => m.counted && compressed(m) && !m.failed && (m.callIndex ?? start) >= start);
     const sent = ms.filter((m) => SENT.includes(m.dir)).length;
     const received = ms.filter((m) => RECEIVED.includes(m.dir)).length;
     const row = { name: r.id.slice(0, 8), turns: r.calls - start, sent, received };
@@ -652,13 +740,15 @@ export async function run(argv, { cwd = process.cwd(), home = process.env.CLAUDE
     input: o.input ?? PRICES.input, output: o.output ?? PRICES.output,
     write5m: o['write-5m'] ?? PRICES.write5m, write1h: o['write-1h'] ?? PRICES.write1h, read: o.read,
   };
-  const ratio = o['saving-ratio'] ?? SAVING_RATIO;
+  // --saving-ratio replaces the ratio of every compressed style; nothing compresses what is written under off.
+  const override = o['saving-ratio'];
+  const ratios = override === undefined ? { ...SAVING_RATIOS } : { brevity: override, lite: override, terse: override, off: 0 };
   const root = join(home, 'projects');
   const dirs = o.project.length ? o.project.map((d) => resolve(cwd, d)) : defaultProjects(cwd, root);
   for (const d of dirs) if (!existsSync(d)) throw new Error(`no such folder: ${d}`);
   if (!dirs.length) throw new Error(`no Claude Code project folder for ${resolve(cwd)} under ${root}; name one with --project`);
   const sources = transcripts(dirs);
-  const records = await meter(sources, { count: tok.count, prices, ratio, since: o.since, until: o.until });
+  const records = await meter(sources, { count: tok.count, prices, ratios, since: o.since, until: o.until });
   for (const r of records) {
     r.specCost = r.copyCost + r.skillCost;
     r.saving = r.messages.reduce((a, m) => a + m.saving, 0);
@@ -675,7 +765,7 @@ export async function run(argv, { cwd = process.cwd(), home = process.env.CLAUDE
       for (const m of r.messages) delete m.ts;
     }
   }
-  const active = (r) => r.calls > 0 || r.tally.sentBrevity + r.tally.sentProse + r.tally.receivedBrevity + r.tally.receivedProse > 0;
+  const active = (r) => r.calls > 0 || r.messages.some((m) => m.counted && [...SENT, ...RECEIVED].includes(m.dir));
   const team = records.filter((r) => r.kind === 'team' && active(r));
   const tests = records.filter((r) => r.kind === 'test' && active(r));
   const subagents = records.filter((r) => r.kind === 'subagent' && r.calls > 0);
@@ -685,11 +775,12 @@ export async function run(argv, { cwd = process.cwd(), home = process.env.CLAUDE
     tokenizer: tok.name,
     prices: { ...prices, read: prices.read ?? 'by model', readByModel: Object.fromEntries(Object.keys(models).map((m) => [m, readPrice(m, prices)])) },
     models,
-    savingRatio: ratio,
+    savingRatios: ratios,
+    savingRatioOverride: override ?? null,
     window: { since: o.since === undefined ? null : new Date(o.since).toISOString(), until: o.until === undefined ? null : new Date(o.until).toISOString() },
     folders: dirs.length,
     transcripts: { sessions: sources.filter((s) => s.kind === 'session').length, subagents: sources.filter((s) => s.kind === 'subagent').length },
-    team: { sessions: team, total: summarize(team) },
+    team: { sessions: team, total: summarize(team), arms: perArm(team, ratios) },
     tests: { sessions: tests, total: summarize(tests) },
     subagents: { total: summarize(subagents) },
     duplicates: team.flatMap((r) => r.duplicates.map((d) => ({ session: r.id.slice(0, 8), ...d }))),
@@ -699,8 +790,8 @@ export async function run(argv, { cwd = process.cwd(), home = process.env.CLAUDE
     const rows = teamSessions(team);
     writeFileSync(resolve(cwd, o['team-json']), `${JSON.stringify(rows, null, 2)}\n`);
     const t = result.team.total;
-    const brevityMsgs = team.flatMap((r) => r.messages.filter((m) => m.counted && m.brevity && !m.failed && [...SENT, ...RECEIVED].includes(m.dir)));
-    const meanSaving = brevityMsgs.length ? brevityMsgs.reduce((a, m) => a + (m.tokens * ratio) / (1 - ratio), 0) / brevityMsgs.length : 0;
+    const saved = team.flatMap((r) => r.messages.filter((m) => m.counted && compressed(m) && !m.failed && [...SENT, ...RECEIVED].includes(m.dir)));
+    const meanSaving = saved.length ? saved.reduce((a, m) => a + (m.tokens * m.ratio) / (1 - m.ratio), 0) / saved.length : 0;
     const allCopies = team.flatMap((r) => r.copyTokens);
     const load = allCopies.length ? allCopies.reduce((a, c) => a + c.tokens, 0) / allCopies.length : 0;
     // The team's write price per token, weighted by what its calls wrote, and the read price of its busiest model.
@@ -715,7 +806,7 @@ export async function run(argv, { cwd = process.cwd(), home = process.env.CLAUDE
       compare: `node "${costModel}" "${o['team-json']}" --saving ${+meanSaving.toFixed(1)} --load-tokens ${Math.round(load)} `
         + `--output ${prices.output} --write ${+w.toFixed(2)} --read ${read}`,
       inputIgnored: prices.input !== PRICES.input,
-      // The file holds each session's calls and messages from its first spec copy on: compare the net of those calls.
+      // The file holds each session's calls and messages from its first copy on: compare the net of those calls.
       measuredNet: t.netLoaded,
     };
   }
@@ -731,6 +822,8 @@ const table = (rows, left = 1) => {
   const width = rows[0].map((_, c) => Math.max(...rows.map((r) => String(r[c]).length)));
   return rows.map((r) => r.map((v, c) => (c < left ? String(v).padEnd(width[c]) : String(v).padStart(width[c]))).join('  ').trimEnd()).join('\n');
 };
+
+const and = (xs) => (xs.length > 1 ? `${xs.slice(0, -1).join(', ')} and ${xs.at(-1)}` : xs[0] ?? '');
 
 export function render(r) {
   const out = [];
@@ -748,40 +841,57 @@ export function render(r) {
   const t = r.team.total;
   out.push('', `team: ${plural(t.sessions, 'session')}`);
   if (t.sessions) {
-    const head = ['session', ...(r.titles ? ['title'] : []), 'calls', 'bill', 'copies', 'spec cost', 'sent b/p', 'received b/p', 'msg tokens',
-      'est. saving', 'net'];
-    const row = (x, name, title) => {
+    // The lite and terse counts show only when some message was written under those arms.
+    const styles = t.sentLite + t.sentTerse + t.receivedLite + t.receivedTerse > 0 ? ['Brevity', 'Lite', 'Terse', 'Prose'] : ['Brevity', 'Prose'];
+    const split = styles.map((s) => s[0].toLowerCase()).join('/');
+    const counts = (m, dir) => styles.map((s) => m[`${dir}${s}`]).join('/');
+    const head = ['session', ...(r.titles ? ['title'] : []), 'arm', 'calls', 'bill', 'copies', 'load cost', `sent ${split}`, `received ${split}`,
+      'msg tokens', 'est. saving', 'net'];
+    const row = (x, name, title, arm) => {
       const m = x.tally ?? x;
-      return [name, ...(r.titles ? [title ?? ''] : []), fmt(x.calls), fmt(x.bill), fmt(x.copies), fmt(x.specCost),
-        `${m.sentBrevity}/${m.sentProse}`, `${m.receivedBrevity}/${m.receivedProse}`, fmt(m.messageTokens), fmt(x.saving), signed(x.net)];
+      return [name, ...(r.titles ? [title ?? ''] : []), arm, fmt(x.calls), fmt(x.bill), fmt(x.copies), fmt(x.specCost), counts(m, 'sent'),
+        counts(m, 'received'), fmt(m.messageTokens), fmt(x.saving), signed(x.net)];
     };
-    out.push(table([head, ...r.team.sessions.map((s) => row(s, s.id.slice(0, 8), s.title)), row(t, 'total', '')], r.titles ? 2 : 1));
-    out.push('b/p = brevity/prose. sent = SendMessage deliveries and delegation prompts; received = peer messages and delegation prompts.');
+    out.push(table([head, ...r.team.sessions.map((s) => row(s, s.id.slice(0, 8), s.title, s.arm)), row(t, 'total', '', '')], r.titles ? 3 : 2));
+    out.push(`arm = the arm of the session's last copy (none: no copy). ${split} = ${styles.map((s) => s.toLowerCase()).join('/')}.`);
+    out.push('sent = SendMessage deliveries and delegation prompts; received = peer messages and delegation prompts.');
     if (t.billLoaded) {
       const s = t.shareOfLoadedBill;
-      out.push(`with brevity loaded (each session from its first spec copy on): ${plural(t.callsLoaded, 'call')}, bill ${fmt(t.billLoaded)}; `
-        + `on those calls, spec cost ${fmt(t.specCostLoaded)} (${pct(s.specCost)}), estimated saving ${fmt(t.savingLoaded)} (${pct(s.saving)}), `
+      out.push(`with an arm loaded (each session from its first copy on): ${plural(t.callsLoaded, 'call')}, bill ${fmt(t.billLoaded)}; `
+        + `on those calls, load cost ${fmt(t.specCostLoaded)} (${pct(s.specCost)}), estimated saving ${fmt(t.savingLoaded)} (${pct(s.saving)}), `
         + `net ${signed(t.netLoaded)} (${pct(s.net)})`);
     }
-    out.push(`spec cost ${fmt(t.specCost)} = copies ${fmt(t.copyCost)} + skill entry ${fmt(t.skillCost)}; ${plural(t.rewrites, 'time')} a call `
+    out.push(`load cost ${fmt(t.specCost)} = copies ${fmt(t.copyCost)} + skill entry ${fmt(t.skillCost)}; ${plural(t.rewrites, 'time')} a call `
       + `wrote a copy again after an idle cache miss or a rebuild (${fmt(t.rewriteCost)} of the cost)`);
-    out.push(`messages: ${fmt(t.deliveredBrevity)} brevity and ${fmt(t.deliveredProse)} prose SendMessage deliveries, `
+    const delivered = styles.map((s) => `${fmt(t[`delivered${s}`])} ${s.toLowerCase()}`);
+    out.push(`messages: ${and(delivered)} SendMessage deliveries, `
       + `${plural(t.failed, 'failed send')}, ${plural(t.delegations, 'delegation prompt')}; to and from subagents: `
       + `${plural(t.subagentPrompts, 'prompt')}, ${plural(t.handbacks, 'result')} (their savings are in est. saving)`);
-    out.push(`est. saving is an estimate: no prose original exists, so each brevity message is taken to replace prose `
-      + `${(1 / (1 - r.savingRatio)).toFixed(3)} times its length (--saving-ratio ${r.savingRatio}).`);
+    const rs = r.savingRatios;
+    out.push(`est. saving is an estimate: no prose original exists, so each message is taken to replace prose 1 / (1 - r) times `
+      + `its length, with r = ${r.savingRatioOverride === null
+        ? `brevity ${rs.brevity}, lite ${rs.lite}, terse ${rs.terse} (the single-pass pilot, issue #26)`
+        : `${r.savingRatioOverride} for brevity, lite and terse (--saving-ratio)`}; prose, and what is written under off, saves nothing.`);
+
+    out.push('', 'per arm (each session under the arm of its last copy; % = share of those sessions\' bill):');
+    const share = (a, key) => (a.shareOfBill ? pct(a.shareOfBill[key]) : '-');
+    out.push(table([
+      ['arm', 'ratio', 'sessions', 'calls', 'bill', 'load cost', 'load %', 'sent', 'received', 'est. saving', 'saving %', 'net', 'net %'],
+      ...Object.entries(r.team.arms).map(([arm, a]) => [arm, a.ratio ?? '-', fmt(a.sessions.length), fmt(a.calls), fmt(a.bill), fmt(a.loadCost),
+        share(a, 'loadCost'), fmt(a.sent), fmt(a.received), fmt(a.saving), share(a, 'saving'), signed(a.net), share(a, 'net')]),
+    ]));
   }
-  out.push('', r.duplicates.length ? 'duplicated spec copies (two or more in one context, issue #39):' : 'duplicated spec copies: none');
+  out.push('', r.duplicates.length ? 'duplicated copies (two or more in one context, issue #39):' : 'duplicated copies: none');
   for (const d of r.duplicates) {
     out.push(`  ${d.session}  ${d.copies} copies from ${d.from} to ${d.to}: ${plural(d.calls, 'call')}, extra cost ${fmt(d.extra)}`);
   }
   const line = (label, x, unit) => `${label}: ${plural(x.sessions, unit)}, ${plural(x.calls, 'call')}, bill ${fmt(x.bill)}, `
-    + `${plural(x.copies, 'spec copy', 'spec copies')}, spec cost ${fmt(x.specCost)}`;
+    + `${plural(x.copies, 'copy', 'copies')}, load cost ${fmt(x.specCost)}`;
   out.push('', line('tests (claude -p), apart from the team', r.tests.total, 'session'));
   out.push(line('subagents, apart from the team', r.subagents.total, 'transcript'));
   if (r.teamJson) {
     out.push('', `wrote ${plural(r.teamJson.rows, 'session')} to ${r.teamJson.file}; to compare the cost model with this measurement `
-      + `(net with brevity loaded ${signed(r.teamJson.measuredNet)}), run:`, `  ${r.teamJson.compare}`);
+      + `(net with an arm loaded ${signed(r.teamJson.measuredNet)}), run:`, `  ${r.teamJson.compare}`);
     if (r.teamJson.inputIgnored) out.push(`the cost model has no input price, so --input ${p.input} is not passed to it`);
   }
   return out.join('\n');

@@ -152,14 +152,18 @@ transcripts Claude Code keeps on your machine. Run it from your project's folder
 node /path/to/brevity/tools/meter.mjs
 ```
 
-It prints a table with one row per session: its model calls, its bill in input-token equivalents, the copies of the
-spec that the hook injected, and their spec cost. That cost is priced call by call, so it includes copies written
+It prints a table with one row per session: its arm, its model calls, its bill in input-token equivalents, the
+copies that the hook injected, and their load cost. That cost is priced call by call, so it includes copies written
 again after an idle cache miss, re-injections after a compaction, and duplicates after a resume. The row also gives
-the brevity and prose messages the session sent and received, their tokens, the estimated saving and the net. Below
-the table come the team's shares of the bill, how often and at what cost copies were written again, and each run
-of duplicated copies; `--json` adds each session's drops by compaction and resume. The saving is an estimate,
-because a real message has no prose original to compare with. `--team-json team.json` writes your sessions in the
-cost model's format, and the output gives the command that compares the model with the measurement.
+the messages the session sent and received, by style (brevity, lite, terse or prose), their tokens, the estimated
+saving and the net. Below the table come the team's shares of the bill, how often and at what cost copies were
+written again, a summary per arm (sessions, calls, bill, load cost, messages, estimated saving, net and their shares
+of the bill), and each run of duplicated copies; `--json` adds each session's drops by compaction and resume.
+
+The saving is an estimate, because a real message has no prose original to compare with. Each arm's ratio comes
+from the single-pass pilot: brevity 0.154, lite 0.087 and terse 0.102. Messages written under off save nothing, and
+`--saving-ratio` replaces the other three. `--team-json team.json` writes your sessions in the cost model's format,
+and the output gives the command that compares the model with the measurement.
 
 ## Where it works
 
@@ -196,7 +200,28 @@ The hook needs **Node.js 16.6 or later** on your `PATH`. The skill needs nothing
 The hook does nothing until a project opts in: create a `.brevity/` folder at the project root (empty is fine), or
 set `BREVITY_ALWAYS=1`. Then, on startup, resume, `/clear` and compaction, it injects `SPEC.md`, then the nearest
 `.brevity/DICT.md` and `.brevity/DICT.local.md` found from the session's directory upwards. Git worktrees nested
-inside the main clone therefore pick up the main clone's dictionary. `BREVITY_DICT` can name extra files.
+inside the main clone therefore pick up the main clone's dictionary. `BREVITY_DICT` can name extra files. On a
+resume, it injects nothing when the conversation being resumed still holds the copy it injected earlier.
+
+**Choose what the hook loads.** To compare approaches on your own work, an opted-in project can load lighter
+instructions than the spec, and [tools/meter.mjs](tools/meter.mjs) reports each one apart. Write one word in
+`.brevity/arm`, found the way the dictionaries are, or set `BREVITY_ARM`, which wins over the file:
+
+| arm | what each session loads | tokens loaded | single-pass pilot: saving, messages with a lost fact per 100 |
+|---|---|---|---|
+| `brevity`, the default | `SPEC.md` and your dictionaries | 2,698, plus the dictionaries | 15.4%, 14.9 (with the evaluation's dictionary) |
+| `lite` | [arms/lite.md](arms/lite.md): the spec's KEEP rules in plain terse English, without dictionaries | 348 | 8.7%, 3.0 |
+| `terse` | [arms/terse.md](arms/terse.md): one paragraph asking for terse English | 176 | 10.2%, 7.1 |
+| `off` | the marker line alone | 8 | nothing to measure |
+
+- **Counts.** Tokens are counted with the legacy tokenizer, `@anthropic-ai/tokenizer`, marker included. The pilot
+  figures come from [issue #26](https://github.com/nsalloums/brevity/issues/26): one writing pass on one private
+  corpus, with the limits listed there.
+- **The marker.** Every injection starts with `<!-- brevity arm: <arm> -->`, which the meter reads.
+- **Defaults.** With no value, the hook loads `brevity`. With a value it does not know, it loads `brevity` and adds a
+  line that says so.
+- **Mixing arms.** lite and terse messages use no aliases or notation, so any session can read them. A session under
+  lite, terse or off has no spec, so it may misread a brevity message from a session under brevity.
 
 Without the plugin, add `@/path/to/brevity/SPEC.md` to your `~/.claude/CLAUDE.md` or the project's `CLAUDE.md`.
 
@@ -230,13 +255,24 @@ Copy `skills/brevity/` to `~/.agents/skills/brevity/` (Codex, Gemini CLI, Cursor
 
 - **The hook.** On session start, resume, `/clear` and compaction, Claude Code runs
   `node "${CLAUDE_PLUGIN_ROOT}/hooks/inject.mjs" <k>` four times (k = 0 to 3), because each hook's output is capped
-  at 10,000 characters. Each run exits at once, with no output, unless a `.brevity/` folder exists in the session's
-  directory, in one of its parent directories or in `CLAUDE_PROJECT_DIR`, or `BREVITY_ALWAYS=1` is set. A
-  `.brevity/` folder in a parent directory, such as your home folder, therefore opts in every project below it.
-- **What the hook reads** when a project opts in: the plugin's own `SPEC.md`; the nearest `.brevity/DICT.md` and
-  `.brevity/DICT.local.md` at or above the session's directory; any files named in `BREVITY_DICT`; and the
-  environment variables `CLAUDE_PLUGIN_ROOT`, `CLAUDE_PROJECT_DIR`, `BREVITY_ALWAYS` and `BREVITY_DICT`. It prints
-  those files as context for the session, in parts under the cap.
+  at 10,000 characters. Each run reads the hook input that Claude Code passes on stdin, which includes the session's
+  directory, the event and the path of the session's transcript. It exits at once, with no output, unless a
+  `.brevity/` folder exists in the session's directory, in one of its parent directories or in
+  `CLAUDE_PROJECT_DIR`, or `BREVITY_ALWAYS=1` is set. A `.brevity/` folder in a parent directory, such as your home
+  folder, therefore opts in every project below it.
+- **What the hook reads** when a project opts in:
+  - the arm, from `BREVITY_ARM` or the nearest `.brevity/arm` at or above the session's directory;
+  - for the `brevity` arm, the plugin's own `SPEC.md`, the nearest `.brevity/DICT.md` and `.brevity/DICT.local.md`
+    at or above the session's directory, and any files named in `BREVITY_DICT`;
+  - for the `lite` and `terse` arms, the plugin's own `arms/lite.md` or `arms/terse.md`;
+  - on a resume only, the session's own transcript at `transcript_path`, read-only, to check whether the
+    conversation being resumed already holds a copy of the same arm. It reads the file from its end, follows the
+    conversation back no further than the last compaction or `/clear`, and prints nothing from it;
+  - the environment variables `CLAUDE_PLUGIN_ROOT`, `CLAUDE_PROJECT_DIR`, `BREVITY_ALWAYS`, `BREVITY_DICT` and
+    `BREVITY_ARM`.
+
+  It prints the arm's marker and files as context for the session, in parts under the cap, or nothing when a
+  resumed conversation already holds them.
 - **What it never does.** No network requests, no file writes, no other files or variables read.
 - **The skill.** Claude reads `skills/brevity/SKILL.md` and `SPEC.md` from the plugin and, when they exist, the
   project's `.brevity/` dictionaries.
@@ -296,6 +332,8 @@ These run as written. For the third, start Claude Code in a folder set up as des
 - **Four "SessionStart hook error" notices at every session start.** Node.js is not on your `PATH`, and the hook
   runs `node`. Install Node.js 16.6 or later, or disable the plugin in `/plugin`. The skill works without Node.js.
 - **"more parts did not fit the 4 hook slots".** Your dictionaries are too long to inject. Shorten them.
+- **"unknown arm".** `.brevity/arm` or `BREVITY_ARM` holds a word other than `brevity`, `lite`, `terse` or `off`, so
+  the hook loaded `brevity`. Fix the word, then start a new session.
 - **In chat, messages that use dictionary aliases do not decode.** Chat has no project folder, so it has no
   dictionary. Paste the dictionary into the conversation, or ask the sender to spell the aliases out.
 - **The skill reads SPEC.md again although the hook loaded it.** This is harmless: the skill is told to use the copy

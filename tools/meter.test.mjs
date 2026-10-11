@@ -8,7 +8,13 @@
 // (logged as queued_command attachments), and is resumed past a parent that was never written.
 // "fork" continues the hub under a new id. "test" is a claude -p run. Every injected copy is 800 characters, so
 // 200 tokens at chars/4, and the skill entry 30. tools/fixtures/meter/late holds one session that sends a brevity
-// message before it loads the spec, at a resume.
+// message before it loads the spec, at a resume. Those copies predate arms: they carry no arm marker.
+//
+// tools/fixtures/meter/arms holds one session per arm, all on claude-opus-5-5 with 1-hour writes, where each call reads
+// the previous call's prompt and writes what is new. "lite" loads the lite arm (a 100-token copy) and sends M1 to
+// "terse". "terse" loads the terse arm (80 tokens), receives M1 and answers with M2. "switch" loads lite and sends M3,
+// then is resumed 90 minutes later under off (the marker alone, 26 tokens) with the lite copy still in context, and
+// sends M4, which has a verb line. "plain" loads nothing.
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
@@ -23,6 +29,7 @@ const here = dirname(fileURLToPath(import.meta.url));
 const tool = join(here, 'meter.mjs');
 const team = join(here, 'fixtures', 'meter', 'team');
 const late = join(here, 'fixtures', 'meter', 'late');
+const armsDir = join(here, 'fixtures', 'meter', 'arms');
 const dir = mkdtempSync(join(tmpdir(), 'brevity-meter-'));
 after(() => rmSync(dir, { recursive: true, force: true }));
 const count = (t) => Math.ceil(t.length / 4);
@@ -119,8 +126,9 @@ test('sent, failed and received messages, with the estimated saving where each o
   assert.equal(messages(hub, 'handback').length, 1);
   assert.equal(messages(hub, 'subagent-prompt').length, 1);
   assert.deepEqual(hub.tally, {
-    sentBrevity: 2, sentProse: 1, failed: 1, deliveredBrevity: 1, deliveredProse: 1, delegations: 1,
-    receivedBrevity: 1, receivedProse: 0, subagentPrompts: 1, handbacks: 1, messageTokens: 50 + 40 + 100 + 60, brevityTokens: 50 + 100 + 60,
+    sentBrevity: 2, sentLite: 0, sentTerse: 0, sentProse: 1, failed: 1, deliveredBrevity: 1, deliveredLite: 0, deliveredTerse: 0,
+    deliveredProse: 1, delegations: 1, receivedBrevity: 1, receivedLite: 0, receivedTerse: 0, receivedProse: 0, subagentPrompts: 1,
+    handbacks: 1, messageTokens: 50 + 40 + 100 + 60, brevityTokens: 50 + 100 + 60,
   });
   // The peer's first message is the hub's delegation prompt: written at its first call (5-minute, 1.25), read at
   // calls 2 and 3, gone at the resume.
@@ -237,7 +245,7 @@ test('the shares of the loaded bill count only the calls from each session\'s fi
   close(share.specCost, 400 / s.billLoaded);
   close(share.saving, s.savingLoaded / s.billLoaded);
   close(share.net, (s.savingLoaded - 400) / s.billLoaded);
-  assert.match(render(r), /on those calls, spec cost 400 \(43\.66%\), estimated saving 0 \(0\.03%\), net -400 \(-43\.63%\)/);
+  assert.match(render(r), /on those calls, load cost 400 \(43\.66%\), estimated saving 0 \(0\.03%\), net -400 \(-43\.63%\)/);
 });
 
 test('the default folders are the current directory\'s and its worktrees\', also from inside a worktree', () => {
@@ -267,8 +275,9 @@ test('on Windows the folder is found whatever case the shell keeps the path in',
 test('the output is numbers and short ids; titles only with --titles, and never message text', async () => {
   const plain = cli();
   assert.equal(plain.status, 0, plain.stderr);
-  assert.match(plain.stdout, /^hub +8 /m);
-  assert.match(plain.stdout, /duplicated spec copies \(two or more in one context, issue #39\):\n {2}hub {2}2 copies/);
+  assert.match(plain.stdout, /^hub +brevity +8 /m);
+  assert.match(plain.stdout, /sent b\/p/, 'no lite or terse columns without lite or terse messages');
+  assert.match(plain.stdout, /duplicated copies \(two or more in one context, issue #39\):\n {2}hub {2}2 copies/);
   assert.match(plain.stdout, /est\. saving is an estimate/);
   assert.match(plain.stdout, /^tokenizer: /m);
   assert.doesNotMatch(plain.stdout, /acme hub \(synthetic\)/);
@@ -300,4 +309,123 @@ test('a project with no transcripts folder says so', async () => {
   const home = join(dir, 'home');
   mkdirSync(join(home, 'projects'), { recursive: true });
   await assert.rejects(run([], { count, cwd: join(dir, 'nothing-here'), home }), /no Claude Code project folder/);
+});
+
+// The arms fixture, read with chars/4.
+const arms = (...args) => run(['--project', armsDir, ...args], { count, cwd: dir });
+const wrapped = (t) => `<system-reminder>\nSessionStart hook additional context: ${t}\n</system-reminder>`;
+const saved = (tokens, r) => (tokens * r) / (1 - r);
+
+test('copies from before arms are brevity copies', async () => {
+  const r = await meter();
+  for (const id of ['hub', 'peer', 'fork']) {
+    assert.equal(session(r, id).arm, 'brevity', id);
+    assert.deepEqual(session(r, id).arms, ['brevity'], id);
+  }
+  assert.deepEqual(Object.keys(r.team.arms), ['brevity']);
+  assert.deepEqual(r.team.arms.brevity.sessions, ['hub', 'peer', 'fork']);
+});
+
+test('a lite, terse or off copy is the whole injection after its marker; an off copy is the marker alone', async () => {
+  const r = await arms();
+  assert.deepEqual(session(r, 'lite').copyTokens, [{ arm: 'lite', tokens: 100, spec: 82, dict: 0 }]);
+  assert.deepEqual(session(r, 'terse').copyTokens, [{ arm: 'terse', tokens: 80, spec: 62, dict: 0 }]);
+  const off = session(r, 'switch').copyTokens[1];
+  assert.equal(off.arm, 'off');
+  assert.equal(off.tokens, count(wrapped('<!-- brevity arm: off -->\n')));
+  // Written at the first call that carries it, then read.
+  close(session(r, 'lite').copyCost, 100 * (2 + 0.05));
+  close(session(r, 'terse').copyCost, 80 * (2 + 0.05 + 0.05));
+  // The lite copy outlives the resume and is written again after 90 idle minutes; the off copy joins it.
+  close(session(r, 'switch').copyCost, 100 * (2 + 0.05 + 2 + 0.05) + 26 * (2 + 0.05));
+  assert.deepEqual(r.duplicates.map((d) => [d.session, d.copies, d.calls]), [['switch', 2, 2]]);
+});
+
+test('a session is under the arm of its last copy; what it sends is written under the newest copy in its context', async () => {
+  const r = await arms();
+  assert.deepEqual(r.team.sessions.map((s) => [s.id, s.arm, s.arms]), [
+    ['lite', 'lite', ['lite']], ['terse', 'terse', ['terse']], ['switch', 'off', ['lite', 'off']], ['plain', 'none', []],
+  ]);
+  // Under lite and terse every message is that arm's. M1: 25 tokens, its output, then written at the sender's next call.
+  const [m1] = messages(session(r, 'lite'), 'sent');
+  assert.deepEqual([m1.arm, m1.style, m1.ratio, m1.tokens, m1.brevity], ['lite', 'lite', 0.087, 25, false]);
+  close(m1.saving, saved(25, 0.087) * (5 + 2));
+  const [m2] = messages(session(r, 'terse'), 'sent');
+  assert.deepEqual([m2.arm, m2.style, m2.ratio, m2.tokens], ['terse', 'terse', 0.102, 16]);
+  close(m2.saving, saved(16, 0.102) * (5 + 2));
+  // M3 went out under lite, before the resume; M4 under off, which saves nothing, though it has a verb line.
+  const [m3, m4] = messages(session(r, 'switch'), 'sent');
+  assert.deepEqual([m3.arm, m3.style, m3.ratio], ['lite', 'lite', 0.087]);
+  close(m3.saving, saved(18, 0.087) * (5 + 2 + 2 + 0.05));
+  assert.deepEqual([m4.arm, m4.style, m4.brevity, m4.ratio, m4.saving], ['off', 'brevity', true, 0, 0]);
+});
+
+test('a received message takes the arm and style of the sent message with the same text', async () => {
+  const r = await arms();
+  const [got] = messages(session(r, 'terse'), 'received');
+  assert.deepEqual([got.arm, got.style, got.ratio, got.tokens, got.brevity], ['lite', 'lite', 0.087, 25, false]);
+  // Written at the receiver's next call, read at the one after.
+  close(got.saving, saved(25, 0.087) * (2 + 0.05));
+  assert.deepEqual(session(r, 'terse').tally, {
+    sentBrevity: 0, sentLite: 0, sentTerse: 1, sentProse: 0, failed: 0, deliveredBrevity: 0, deliveredLite: 0, deliveredTerse: 1,
+    deliveredProse: 0, delegations: 0, receivedBrevity: 0, receivedLite: 1, receivedTerse: 0, receivedProse: 0, subagentPrompts: 0,
+    handbacks: 0, messageTokens: 16 + 25, brevityTokens: 0,
+  });
+});
+
+test('the per-arm summary adds up the sessions under each arm', async () => {
+  const r = await arms();
+  const a = r.team.arms;
+  assert.deepEqual(Object.keys(a), ['lite', 'terse', 'off', 'none']);
+  assert.deepEqual(Object.values(a).map((x) => [x.ratio, x.sessions, x.sent, x.received]), [
+    [0.087, ['lite'], 1, 0], [0.102, ['terse'], 1, 1], [0, ['switch'], 2, 0], [null, ['plain'], 0, 0],
+  ]);
+  for (const [arm, x] of Object.entries(a)) {
+    const ss = r.team.sessions.filter((s) => s.arm === arm);
+    close(x.calls, ss.reduce((t, s) => t + s.calls, 0));
+    close(x.bill, ss.reduce((t, s) => t + s.bill, 0));
+    close(x.loadCost, ss.reduce((t, s) => t + s.specCost, 0));
+    close(x.saving, ss.reduce((t, s) => t + s.saving, 0));
+    close(x.net, x.saving - x.loadCost);
+    close(x.shareOfBill.net, x.net / x.bill);
+  }
+  // lite: 2 calls, 2,355 + 455.25.
+  close(a.lite.bill, 2810.25);
+  close(a.lite.saving, saved(25, 0.087) * 7);
+  close(a.lite.shareOfBill.loadCost, 205 / 2810.25);
+  assert.equal(a.off.compressed, 1, 'M3, written under lite before the switch');
+  const text = render(r);
+  assert.match(text, /^session +arm +calls +bill +copies +load cost +sent b\/l\/t\/p +received b\/l\/t\/p/m);
+  assert.match(text, /^terse +terse +3 +3,222 +1 +168 +0\/0\/1\/0 +0\/1\/0\/0 /m);
+  assert.match(text, /^per arm \(each session under the arm of its last copy/m);
+  assert.match(text, /^lite +0\.087 +1 +2 +2,810 +205 +7\.29% +1 +0 +17 +0\.59% +-188 +-6\.70%$/m);
+  assert.match(text, /^none +- +1 +1 +1,255 +0 /m);
+  assert.match(text, /with r = brevity 0\.154, lite 0\.087, terse 0\.102 \(the single-pass pilot, issue #26\)/);
+  assert.match(text, /messages: 1 brevity, 2 lite, 1 terse and 0 prose SendMessage deliveries/);
+});
+
+test('--saving-ratio replaces the ratio of every arm, and off still saves nothing', async () => {
+  const r = await arms('--saving-ratio', '0.2');
+  assert.deepEqual(r.savingRatios, { brevity: 0.2, lite: 0.2, terse: 0.2, off: 0 });
+  assert.equal(r.savingRatioOverride, 0.2);
+  const [m1] = messages(session(r, 'lite'), 'sent');
+  close(m1.saving, saved(25, 0.2) * 7);
+  assert.equal(messages(session(r, 'switch'), 'sent')[1].saving, 0);
+  assert.equal(r.team.arms.lite.ratio, 0.2);
+  assert.match(render(r), /with r = 0\.2 for brevity, lite and terse \(--saving-ratio\)/);
+  const plain = await arms();
+  assert.deepEqual(plain.savingRatios, { brevity: 0.154, lite: 0.087, terse: 0.102, off: 0 });
+  assert.equal(plain.savingRatioOverride, null);
+});
+
+test('--team-json counts the messages that save, each at its own ratio', async () => {
+  const file = join(dir, 'arms.json');
+  const res = spawnSync(process.execPath, [tool, '--project', armsDir, '--team-json', file], { encoding: 'utf8', cwd: dir });
+  assert.equal(res.status, 0, res.stderr);
+  // M4, written under off, is not one of them.
+  assert.deepEqual(JSON.parse(readFileSync(file, 'utf8')).map((x) => [x.name, x.sent, x.received]), [
+    ['lite', 1, 0], ['terse', 1, 1], ['switch', 1, 0], ['plain', 0, 0],
+  ]);
+  const mean = (saved(25, 0.087) + saved(16, 0.102) + saved(25, 0.087) + saved(18, 0.087)) / 4;
+  assert.match(res.stdout, new RegExp(`--saving ${+mean.toFixed(1)} `));
 });
