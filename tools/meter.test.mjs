@@ -38,10 +38,12 @@
 // and coord2 corrects it by D3's title. "s5" starts from D5; coord2 writes to it before it asks "Did you mean". "s7",
 // titled apart from D7, starts from D7 after it was sent; coord corrects it by that title, delivered with no msg_id
 // under another name, before s7 asks. "s8" and "s9" both start after D8 and D9; "s9b" continues s9 under a new id and
-// receives coord's correction.
+// receives coord's correction, sent with no msg_id to the title D8 and D9 share. "s0" begins with D2's text before
+// coord sent D2.
 //
-// Every run here counts tokens with chars/4: run() takes `count`, and the command line gets
+// Every run that checks numbers counts tokens with chars/4: run() takes `count`, and the command line gets
 // BREVITY_METER_TOKENIZER=chars/4, so the numbers hold whether or not @anthropic-ai/tokenizer is installed (issue #60).
+// Only the tokenizer test runs the command line without it, to check which tokenizer the output names.
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
@@ -632,11 +634,14 @@ test('a delegation prompt starts the session whose first message it is: one each
   const coord = session(r, 'coord');
   // D1 D2 D3 D4 D5 D5b D6 D7 D8 D9. D3 and D7 have the same text: s3 started before D7 was sent, s7 after. s5 takes
   // D5, not D5b, which failed after it. s8 and s9 both started after D8 and D9: s8, first, takes the newer D9, and s9
-  // takes D8. s9b, which continues s9, keeps s9's prompt.
+  // takes D8. s9b, which continues s9, keeps s9's prompt. s0 began with D2's text before D2 was sent: no prompt
+  // started it, and D2 is s2's.
   assert.deepEqual(messages(coord, 'delegation-sent').map((m) => m.started),
     [true, true, true, false, true, false, false, true, true, true]);
   for (const id of ['s1', 's2', 's3', 's5', 's7', 's8', 's9']) assert.equal(messages(session(r, id), 'delegation-received').length, 1, id);
   assert.deepEqual(messages(session(r, 's9b'), 'delegation-received').map((m) => [m.owned, m.counted]), [[false, false]]);
+  assert.equal(messages(session(r, 's0'), 'delegation-received').length, 0);
+  assert.equal(session(r, 's0').tally.receivedProse + session(r, 's0').tally.receivedTerse, 0);
   // coord2's copies of D1, D2 and D3 are not owned: the originals in coord are the ones started and counted.
   assert.deepEqual(messages(session(r, 'coord2'), 'delegation-sent').map((m) => [m.owned, m.counted, m.started]),
     [[false, false, false], [false, false, false], [false, false, false]]);
@@ -652,8 +657,9 @@ test('each delivered delegation prompt is clarified, corrected or resent by the 
   // session and its question to coord asks leave; coord2 corrects it by D3's title, and its copy of D3 stands for the
   // original although D7 has the same text. D5: coord2 writes to s5 before s5 asks, under coord's name. D6 repeats D1
   // and started nothing, so coord's correction to D1's session after it is not D6's. D7 repeats D3; coord corrects s7
-  // by s7's own title, and that correction reaches s7, matched by its text, before s7 asks. D8: coord's correction
-  // reaches s9b, which continues D8's session. D9 repeats D8.
+  // by s7's own title, and that correction reaches s7, matched by its text, before s7 asks. D8: coord's correction,
+  // with no msg_id and addressed by the title D8 and D9 share, reaches s9b, which continues D8's session: it is
+  // matched by the transcript that received its text, so it is not D9's. D9 repeats D8.
   assert.deepEqual(delegationSignalsOf(session(r, 'coord')),
     ['clarified+corrected', '-', 'corrected', 'failed', '-', 'failed', 'resent', 'corrected+resent', 'corrected', 'resent']);
   // No call window applies to a delegation prompt, whatever --clarify-window says.

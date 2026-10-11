@@ -205,8 +205,8 @@ It matches a reply to its addressee by name. A failed send never counts.
 Delegation prompts (`spawn_task`) get the same three signals in a table of their own, per arm and for the team, so
 that the SendMessage rates stay comparable. They are heuristics too. A prompt starts the session whose first message
 it is, and that session is also known by the prompt's title. When the same text was spawned more than once, each
-session takes the newest such prompt sent before it that no earlier session took. A `spawn_task` whose result is an
-error counts as a failed send, not as a prompt. Rates are per 100 delivered prompts, and `started` counts the
+session takes the newest such prompt sent before it that no earlier session took, and a session that finds none
+started from no prompt. A `spawn_task` whose result is an error counts as a failed send, not as a prompt. Rates are per 100 delivered prompts, and `started` counts the
 prompts whose session the meter read: only those can be clarified or corrected. A prompt is:
 
 - **clarified** when one of the started session's first messages back to the sender, sent before the sender writes

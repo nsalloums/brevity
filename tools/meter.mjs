@@ -53,8 +53,9 @@
 //   or, when they arrive while the session is busy, as queued_command attachments, and counted once per msg_id; and a
 //   delegation prompt that is a session's first message. That session is the one the prompt started. Sessions take
 //   prompts in the order they started, each the newest prompt with its text that was sent before it and that no
-//   earlier session took (an original, not a copy in a continued transcript); a transcript that continues or forks a
-//   session keeps that session's prompt. Peer messages with handback true are subagent results, and
+//   earlier session took, an original rather than a copy in a continued transcript; a session that finds none started
+//   from no prompt, and a transcript that continues or forks a session keeps that session's prompt. Peer messages
+//   with handback true are subagent results, and
 //   Agent tool prompts go to subagents: both are counted apart. A message is written under the arm of the newest copy
 //   in the sender's context. Under lite and terse, every message is that arm's. Otherwise a message is brevity when a
 //   line after its first starts with a SPEC.md section 3 verb (DO, NO, REPLY, ASK, ASKn, An, WILL, DONE, IF, HOLD, GO,
@@ -103,8 +104,9 @@
 //     sends the sender before the sender writes to it again. No call window applies, since a new session reads before
 //     it writes: on brevity's own transcripts (2026-10-11), its first message to the sender came 10 or more calls in;
 //   - corrected, when the sender's next delivered message to that session corrects or retracts something it sent.
-//     That message is matched by the transcript that received it, else by name: the session's names or the prompt's
-//     title. In a transcript that continues or forks the sender, a copied prompt stands for its original;
+//     That message goes to the transcript that received it (by msg_id, else the only one that received its text), and
+//     only when none did, to the session with its name: one of the session's names or the prompt's title. In a
+//     transcript that continues or forks the sender, a copied prompt stands for its original;
 //   - resent, when it repeats a delivered prompt that the same transcript spawned before it (a similarity of 0.8 or
 //     more): the same delegation spawned again.
 //   Only a prompt whose session was measured (started) can be clarified or corrected. The rates are per 100 delivered
@@ -723,9 +725,9 @@ export async function meter(sources, { count, prices = PRICES, ratios, ratio, si
 }
 
 // The delegation prompt that started each session (see the header): its first message, when that equals a delivered
-// prompt from another transcript. Sessions take prompts in the order they started, each the newest original (not a
-// copy) sent before it that no earlier session took, else the newest. A transcript that continues or forks a session
-// copies its first message, and takes that session's prompt.
+// prompt from another transcript. Sessions take prompts in the order they started, each the newest one sent before it
+// that no earlier session took, an original rather than a copy; a session that finds none started from no prompt. A
+// transcript that continues or forks a session copies its first message, and keeps that session's prompt.
 function linkDelegations(records) {
   const byHash = new Map();
   for (const r of records) {
@@ -744,9 +746,8 @@ function linkDelegations(records) {
     const all = byHash.get(hit.hash).filter((x) => x.r !== r);
     const owned = all.filter((x) => x.m.owned);
     const pool = (owned.length ? owned : all).sort((a, b) => order(a.m.ts) - order(b.m.ts));
-    const before = pool.filter((x) => !(time(x.m.ts) > time(f.ts)));
-    const choices = before.length ? before : pool;
-    const d = choices.filter((x) => !taken.has(x.m)).at(-1) ?? choices.at(-1);
+    // A prompt with no time, or a session with none, is taken as sent before it.
+    const d = pool.filter((x) => !(time(x.m.ts) > time(f.ts)) && !taken.has(x.m)).at(-1);
     if (!d) continue;
     taken.add(d.m);
     const link = { hit, delegation: d.m, delegator: d.r };
@@ -761,6 +762,7 @@ function signals(records, window) {
   const byText = new Map(); // text hash to the owned delivered messages with that text
   const senderOf = new Map(); // delivered message to the record that sent it
   const receiverOf = new Map(); // msg_id to the record that received it
+  const receivedText = new Map(); // text hash to the records that own a received message with that text
   const names = new Map(); // record to its title and the names that other sessions give it
   // A transcript that continues a session under a new id, or forks it, copies its lines without owning them: the
   // msg_id belongs to the transcript that owns the line.
@@ -777,7 +779,10 @@ function signals(records, window) {
         senderOf.set(m, r);
         keep(byId, m.msgId, m, m.owned);
         if (m.owned) byText.set(m.hash, [...(byText.get(m.hash) ?? []), m]);
-      } else if (m.dir === 'received') keep(receiverOf, m.msgId, r, m.owned);
+      } else if (m.dir === 'received') {
+        keep(receiverOf, m.msgId, r, m.owned);
+        if (m.owned) receivedText.set(m.hash, new Set([...(receivedText.get(m.hash) ?? []), r]));
+      }
     }
   }
   // What a receiver calls the sender of a message, and what a sender calls its recipient.
@@ -833,7 +838,13 @@ function signals(records, window) {
       }
     });
   }
-  delegationSignals(records, { names, senderOf, original, receiver: (m) => at(receiverOf, m.msgId) });
+  // A delegation signal's message goes to the transcript that received it by msg_id, else the only one that received
+  // its text.
+  const receiver = (m) => {
+    const only = receivedText.get(m.hash);
+    return at(receiverOf, m.msgId) ?? (only?.size === 1 ? [...only][0] : undefined);
+  };
+  delegationSignals(records, { names, senderOf, original, receiver });
 }
 
 // The quality signals of every delivered delegation prompt (see the header), kept apart from the SendMessage ones.
@@ -871,7 +882,8 @@ function delegationSignals(records, { names, senderOf, original, receiver }) {
       if (n.dir !== 'delegation-sent' || !delivered(n)) return;
       const o = originalOf(n);
       // Corrected: the sender's next delivered message to the session the prompt started, matched by the transcript
-      // that received it, else by that session's names or the prompt's title. A prompt that started none is not checked.
+      // that received it, else, when none did, by that session's names or the prompt's title. A prompt that started
+      // none is not checked.
       const rs = started.get(o);
       const toIt = (m) => {
         const t = receiver(m);
