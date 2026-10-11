@@ -11,6 +11,15 @@ Changes waiting on `next` for the next release (see [RELEASING.md](RELEASING.md)
   Claude Code 2.1.214 and later reports as the source `fork`. A fork kept its parent's copy, so after a plugin
   update, a dictionary edit or an arm change it went on with the old one. It now gets the current copy, as a resume
   does. An unchanged copy is not added twice: Claude Code drops identical items on a fork too.
+- **#40, normal.** `tools/cost-model.mjs` prices cache reads by `--model`, which defaults to `claude-opus-5-5`
+  (0.05x; 0.025x on Claude Fable 5.1 and Claude Mythos 5.1, 0.1x on other models), and cache writes at 2x, the 1-hour
+  rate Claude Code paid on every call measured in #11 (`--write 1.25` for 5-minute caching). It prints which prices
+  ran. New options add the costs it left out: `--reinject` and `--reinject-every` for re-injection after
+  compactions and resumes, `--idle-misses` for idle cache misses, and `--skill-entry 143` for the plugin's skill
+  entry. Their defaults add nothing, and the output names `tools/meter.mjs`, which measures them. The README,
+  `docs/costs.md` and `eval/RESULTS.md` figures are rerun: a 200-call session breaks even at 64-92 messages, not
+  76-101 (104-149 at a single pass's 37, not 123-164), and the hub team's largest read-only card is 276 tokens, not
+  309, so the 300-token card loses.
 - **#52, normal.** `tools/meter.mjs` counts three heuristic quality signals per arm and for the team, each as a count
   and a rate per 100 delivered messages: clarification requests (`--clarify-window`, 5 calls by default), corrections
   and re-sends. Numbers only, as before.
