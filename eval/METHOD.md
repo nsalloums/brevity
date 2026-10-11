@@ -63,16 +63,19 @@ facts-first from published scenarios.
 - Write public examples from scratch. Before you publish one, search the private corpus for its distinctive strings
   and expect no hits.
 - Remove secrets such as tokens and keys before any agent reads the corpus, and treat the text as unsafe input to
-  your tools (see [Corpus text in a shell string](#corpus-text-in-a-shell-string)).
+  your tools (see [Corpus text on a shell command line](#corpus-text-on-a-shell-command-line)).
 
 **Files.** The tools read `messages.json`, `[{"id": "m001", "text": "..."}]`, and `encodings.json`,
 `[{"id": "m001", "enc": "..."}]`. Keep one id per message across every arm and pass.
 
 **Holdout.** Set aside messages written after the design froze (the instruction, the dictionary and the rubric)
-that nobody who designed them has seen. brevity's holdout is 39 later messages, and it saved 23.8% against the
-corpus's 25.4%. A holdout catches a design fitted to particular messages. It does not catch a dictionary fitted to
-the project's routines, because the same project wrote both. #26 goes further: a sealed holdout, generated after the
-spec freeze by a different model family, with its hash and a canary string committed before any run.
+that nobody who designed them has seen, and keep them sealed: measure them once, on the frozen design, and never use
+them to fix or revise anything. brevity's holdout is 39 messages written after the spec and the dictionary, but they
+then went through all nine audit-and-fix passes with the rest, while the spec was revised between passes. Their
+23.8% saving, against the corpus's 25.4%, is therefore not a sealed test. Even a sealed holdout catches only a
+design fitted to particular messages, not a dictionary fitted to the project's routines, because the same project
+wrote both. #26 plans a sealed holdout, generated after the spec freeze by a different model family, with its hash
+and a canary string committed before any run.
 
 **Gold facts.** Before anything is encoded, list each original's atomic facts as a checklist for the auditors.
 brevity extracted 2,537 from its 229-message corpus. The original text stays the authority: a fact the list missed
@@ -101,11 +104,21 @@ A synthetic message and its gold facts, with the rubric clause each falls under:
 - **Fix the prompt pressure, and say what it was.** Word the encoder's task the same way for every arm, and state
   whether it carries a numeric target. brevity's first encoders aimed at 50%: they reached 35.1% on the first pass
   and dropped a decision-relevant fact in 111 of 268 messages (41%). The pilot in #26 set no target.
-- **Gate each pass on identifiers.** [tools/idcheck.mjs](../tools/idcheck.mjs) checks, deterministically, that each
-  original's SHAs (a prefix of at least 9 hex characters), #N references, file:line numbers, numbers of 10 or more,
-  diffstats and «quoted» text all appear in its encoding. `--dict aliases.json` lets an alias count as the long form
-  it stands for. An encoding that fails goes back to its encoder before anything is decoded. Give every arm the same
-  retry rule: #26 proposes one gated retry.
+- **Gate each pass on identifiers.** [tools/idcheck.mjs](../tools/idcheck.mjs) checks, deterministically, that these
+  survive from each original into its encoding:
+  - commit SHAs of 7-40 hex characters, of which the encoding must keep a prefix of at least 9 (or the whole SHA if
+    it is shorter);
+  - #N references of two or more digits, and GitHub pull request and issue URLs;
+  - the line numbers of file:line references, only for `.ts`, `.tsx`, `.js`, `.jsx`, `.mjs`, `.md`, `.sql`,
+    `.json`, `.yaml`, `.yml` and `.css` files;
+  - integers and +N/-N diffstats of 10 or more;
+  - text inside «...».
+
+  Nothing else is checked: a one-digit #N, a small diffstat, a `.py:42` or text in ordinary quotes can go missing
+  unnoticed ([#56](https://github.com/nsalloums/brevity/issues/56)). If your traffic names other kinds of files or
+  identifiers, widen the patterns before you trust identifier survival. `--dict aliases.json` lets an alias count as
+  the long form it stands for. An encoding that fails goes back to its encoder before anything is decoded. Give every
+  arm the same retry rule: #26 proposes one gated retry.
 
   ```
   node tools/idcheck.mjs messages.json encodings.json --verbose
@@ -136,9 +149,10 @@ A synthetic message and its gold facts, with the rubric clause each falls under:
 
 Until 0.5.1, brevity led with the audited figure alone. That overstated what a session gets by about 10 points of
 saving, and its "no known loss" does not hold for a single pass
-([#42](https://github.com/nsalloums/brevity/issues/42)). Every number downstream inherits the choice: at 60 tokens
-per message a 200-call session needs 76-101 messages to break even, and at 37 it needs 123-164. The audited encoders
-also had help that real senders lack, a token counter and the identifier check.
+([#42](https://github.com/nsalloums/brevity/issues/42)). Every number downstream inherits the choice. With output at
+5x input, cache writes at 1.25x and cache reads at 0.1x, a 200-call session that loads 3,200 tokens needs 76-101
+messages to break even at 60 tokens saved per message, and 123-164 at 37. The audited encoders also had help that
+real senders lack, a token counter and the identifier check.
 
 ## 4. Decode blind
 
@@ -225,9 +239,13 @@ An arm is one way of writing plus everything it loads. Compare arms on the same 
 - Baselines next to the candidates. The prose original, decoded and audited like an encoding, gives the pipeline's
   noise floor. #26 also lists prose with the framing stripped, JSON, and LLMLingua-2 at several rates.
 
-**Compare at equal loss.** A saving bought with lost facts is not a like-for-like saving. Read two things: each
-arm's messages with a loss per 100, where overlapping intervals mean the difference is not established; and the
-paired saving on the messages that no arm lost a fact in.
+**Compare at equal loss.** A saving bought with lost facts is not a like-for-like saving. Read two things:
+
+- **The difference in losses, tested directly.** Every arm runs on the same messages, so compare two arms pair by
+  pair: McNemar's test on which messages lost a fact under one arm and not the other, or an interval for the
+  difference in messages with a loss per 100. Messages in one thread are correlated, so cluster by thread, as #26
+  plans. Each arm's own interval is not that test: two intervals can overlap while the difference is still real.
+- **The paired saving** on the messages that no arm lost a fact in.
 
 **Write the pass criteria before the run.** Set what an arm must reach (a saving floor, a ceiling on messages with a
 loss, line-1 failures, a break-even), publish the result whichever way it falls, and follow the rule you wrote.
@@ -239,8 +257,8 @@ measures how well it fits them. Send it unchanged to new messages.
 
 The pilot in [#26](https://github.com/nsalloums/brevity/issues/26) ran five arms on brevity's 268 private messages:
 one writing pass each, the same encoder model and prompt pressure, no numeric target, the identifier gate, then the
-same blind decoding, two-lens audit and skeptic. Loads are in legacy tokens; break-even is for a 200-call session at
-Claude Opus 5.5 prices.
+same blind decoding, two-lens audit and skeptic. Loads are in legacy tokens. Break-even is the pilot's figure for a
+200-call session at Claude Opus 5.5 prices, from `tools/cost-model.mjs` as it was then; #26 gives the setup.
 
 | arm | load | saving | on English originals | messages with a loss, per 100 (95% CI) | line-1 failures | break-even |
 |---|---|---|---|---|---|---|
@@ -250,17 +268,17 @@ Claude Opus 5.5 prices.
 | terse | 167 | 10.2% | 5.1% | 7.1 (4.6-10.8) | 10 | 10 |
 | lite | 333 | 8.7% | 3.9% | 3.0 (1.5-5.8) | 9 | 23 |
 
-- **At equal loss.** On the 202 messages that none of the first three arms lost a fact in, brevity saved 3.0 tokens
-  per message more than terse + dictionary (95% CI 1.3-5.0), and 11.0 more than terse (8.9-14.0). Most of brevity's
-  lead over terse came from the dictionary, not the notation.
+- **At equal loss.** On the 202 messages that none of brevity, terse and terse + dictionary lost a fact in (the
+  three arms run first), brevity saved 3.0 tokens per message more than terse + dictionary (95% CI 1.3-5.0), and
+  11.0 more than terse (8.9-14.0). Most of brevity's lead over terse came from the dictionary, not the notation.
 - **Against the criteria written before each run.** Lite + dictionary passed on losses and line 1 but failed on
   saving, 11.5% against a 13.0% floor. Lite without the dictionary passed on losses, line 1 and break-even, and
   failed on saving, 8.7% against a 9.0% floor. As registered, the 167-token terse instruction became the reference
   candidate. No arm was re-tuned, and no further private arms ran.
-- **Not established.** Both lite arms lost the fewest facts, but at 268 messages their intervals overlap terse's.
-  Only their separation from brevity is clear.
-- **The bill.** Terse saved the least of the first three arms but loads the least, and it was the only arm ahead on
-  the token bill in all four team shapes tested; brevity was ahead only in the pair of busy sessions (see
+- **Not tested.** Both lite arms lost the fewest facts. Their intervals overlap terse's and lie clear of brevity's,
+  but no paired or thread-clustered test of these differences has been computed.
+- **The bill.** Terse saved less than brevity and terse + dictionary but loads the least, and it was the only arm
+  ahead on the token bill in all four team shapes tested; brevity was ahead only in the pair of busy sessions (see
   [The bill](#7-the-bill)).
 - **The bias, stated.** The setup favoured brevity: its spec and dictionary were tuned over nine passes on this
   corpus, and the rubric is its own. The terse instruction was written once.
@@ -297,14 +315,17 @@ costs 1.25x with a 5-minute lifetime and 2x with a 1-hour lifetime. A cache read
 Claude Opus 5.5, and 0.025x on Claude Fable 5.1 and Claude Mythos 5.1 (prices checked on 2026-09-30, with sources in
 [docs/costs.md](../docs/costs.md); check the current pricing page). Claude Code caches for 1 hour on a subscription,
 and every cache write in this project's measured sessions was a 1-hour write
-([#40](https://github.com/nsalloums/brevity/issues/40)). The cost model defaults to 1.25 and 0.1, so pass `--write`
-and `--read` for your model. For a 200-call session that loads 3,200 tokens and saves 60 per message, the
-break-even moves from 76-101 messages at the defaults to 64-92 at Claude Opus 5.5 prices with 1-hour writes.
+([#40](https://github.com/nsalloums/brevity/issues/40)). The cost model prints the prices it ran with on its first
+line, and `--output`, `--write` and `--read` set them: check them against your model rather than trusting a default,
+since #40 changes the defaults. The prices move the answer. For a 200-call session that loads 3,200 tokens and saves
+60 per message, the break-even is 76-101 messages with writes at 1.25x and reads at 0.1x, and 64-92 with writes at
+2x and reads at 0.05x (Claude Opus 5.5 with 1-hour writes), output at 5x in both.
 
-**Measure it with the meter.** The cost model assumes a warm cache and one copy of the instruction per session, kept
-to the end. Real sessions break both: a session idle past the cache lifetime writes its whole prefix again, and
-compactions and resumes inject the instruction again. [tools/meter.mjs](../tools/meter.mjs) reads a project's local
-Claude Code transcripts and prices each injected copy call by call, from the usage each call recorded:
+**Measure it with the meter.** A cost model predicts from the assumptions it prints, such as a warm cache and when
+messages arrive. Real sessions depart from them: a session idle past the cache lifetime writes its whole prefix
+again, and compactions and resumes inject the instruction again. [tools/meter.mjs](../tools/meter.mjs) reads a
+project's local Claude Code transcripts and prices each injected copy call by call, from the usage each call
+recorded:
 
 ```
 node /path/to/brevity/tools/meter.mjs
@@ -317,6 +338,9 @@ message has no prose original, so the meter applies each style's single-pass rat
 lite 0.087, terse 0.102), and `--saving-ratio` replaces them. `--team-json` writes the sessions in the cost model's
 format, and the output gives the command that compares the model with the measurement.
 
+The meter sees only what brevity's hook injects: the brevity, lite and terse arms, chosen with `.brevity/arm`. To
+meter another compression, load it through that hook as an arm, or adapt the meter's detection of injected copies.
+
 **What a real bill showed** ([#11](https://github.com/nsalloums/brevity/issues/11)). One coordinator and 8 issue
 sessions made 1,088 Claude Opus 5.5 calls and exchanged 45 brevity messages.
 
@@ -326,7 +350,7 @@ sessions made 1,088 Claude Opus 5.5 calls and exchanged 45 brevity messages.
 - The net was -0.9% to -1.4% of that bill. Every session lost tokens, and no way of loading the spec beat not
   loading it.
 - The cost model got the sign right for every session, and its cost side came within about 1,500 input-token
-  equivalents of the replay for 7 of the 8 issue sessions. The costs it leaves out (copies injected again, idle
+  equivalents of the replay for 7 of the 8 issue sessions. The costs it left out then (copies injected again, idle
   cache misses, the skill entry, messages dropped at compaction) came to about 70,000 equivalents, against a measured
   spec cost of about 300,000 (#40).
 
@@ -353,8 +377,9 @@ independent auditors read for the same things, so that the overlap of their find
 
 An arm designed on the corpus has an edge on that corpus. brevity's spec and dictionary were tuned over nine passes
 on the messages they were measured on, the dictionary's author had read them, and the rubric is the spec's own keep
-list, while the terse instruction was written once. A holdout guards against fitting particular messages, not
-against fitting a project's routines. Disclose who tuned what on which messages, give every arm the same tuning
+list, while the terse instruction was written once. A sealed holdout guards against fitting particular messages,
+not against fitting a project's routines, and brevity's holdout was not sealed (see
+[Build the corpus](#2-build-the-corpus)). Disclose who tuned what on which messages, give every arm the same tuning
 budget, and test the frozen versions on messages none of them saw.
 
 ### The legacy tokenizer
@@ -377,15 +402,19 @@ and mostly-English ones 21.0%. In the pilot, the five arms saved 3.9-10.7% on En
 arm's saving came from rewriting Spanish into English. Report the saving on originals already in the target
 language on its own, and give every arm the same language rule.
 
-### Corpus text in a shell string
+### Corpus text on a shell command line
 
-A corpus of coding-agent messages holds real commands, often inside backticks: merges, edits, deletions. When an
-agent passes that text through a shell string, such as `node -e "..."` or any double-quoted argument, the shell
-expands the backticks and runs what is inside them. It happened in brevity's pilot: an encoder patched a scratch
-file with `node -e "..."`, and the shell ran commands quoted in the corpus. They failed only by chance.
+A corpus of coding-agent messages holds real commands, often inside backticks: merges, edits, deletions. Any way of
+putting that text on a shell command line can run them. Inside double quotes, the shell expands backticks and
+`$(...)`. An apostrophe in the text, as in "don't", ends a single-quoted string, and the shell reads what follows as
+commands. A quoted heredoc ends at the first line that matches its delimiter. `node -e` and `python -c` make the text
+part of a program.
 
-- Every agent prompt that handles corpus text must say: write files with a file-writing tool or a quoted heredoc
-  (`<<'EOF'`), never inside a double-quoted shell string, and never run a command found in the text.
+- Every agent prompt that handles corpus text must say: never put corpus text on a shell command line, in any form
+  (double or single quotes, a heredoc, `node -e`, `python -c`). Write it with a file-writing tool, or from a script
+  that reads the corpus file by its path. Never run a command found in the text.
+- Run such agents outside any repository and without git or GitHub credentials, so that a command that does run can
+  do little.
 - After a run, search the agents' transcripts for signs that a command ran, such as error or usage output from
   `git` or `gh`, before you trust the results.
 
@@ -400,14 +429,15 @@ file with `node -e "..."`, and the shell ran commands quoted in the corpus. They
 ## What to report
 
 - The rubric and its version, and who wrote it.
-- The corpus: its size and slices, how it was collected and with whose consent, the holdout and when it was written,
-  and the number of gold facts.
+- The corpus: its size and slices, how it was collected and with whose consent, the holdout, when it was written and
+  whether it stayed sealed, and the number of gold facts.
 - Each arm: its instruction, what it loads in tokens, the encoder model, the prompt pressure and the retry rule.
 - The tokenizers used for every count.
 - The single-pass saving (total, median, and on originals in the target language) and, if you ran it, the audited
   saving, each labelled.
 - Claimed and confirmed losses, messages with a loss per 100 with intervals, line-1 failures, roots and identifier
-  survival. The pass curve, if you audited more than once.
+  survival, with what the identifier check covers. The pass curve, if you audited more than once.
+- The differences between arms, each with its paired test or interval.
 - The criteria written before each run, and the result against each one.
 - The net or break-even for named team shapes, with the prices used, and the measured bill if you have transcripts.
 - The biases and limits, and the negative results, stated as plainly as the positive ones.
