@@ -217,9 +217,9 @@ write brevity without being asked.
 The hook needs **Node.js 16.6 or later** on your `PATH`. The skill needs nothing.
 
 The hook does nothing until a project opts in: create a `.brevity/` folder at the project root (empty is fine), or
-set `BREVITY_ALWAYS=1`. Then, on startup, resume, `/clear` and compaction, it injects `SPEC.md`, then the nearest
-`.brevity/DICT.md` and `.brevity/DICT.local.md` found from the session's directory upwards. Git worktrees nested
-inside the main clone therefore pick up the main clone's dictionary. `BREVITY_DICT` can name extra files. On a
+set `BREVITY_ALWAYS=1`. Then, on startup, resume, fork, `/clear` and compaction, it injects `SPEC.md`, then the
+nearest `.brevity/DICT.md` and `.brevity/DICT.local.md` found from the session's directory upwards. Git worktrees
+nested inside the main clone therefore pick up the main clone's dictionary. `BREVITY_DICT` can name extra files. On a
 resume, the hook injects the current copy, and Claude Code itself keeps only the injected items whose text changed
 (observed on real resumes, not documented by Claude Code). A second copy therefore appears only when the copy's
 content changed, such as after a plugin update or a dictionary edit, which is what the session should load.
@@ -274,7 +274,7 @@ Copy `skills/brevity/` to `~/.agents/skills/brevity/` (Codex, Gemini CLI, Cursor
 
 ## What the plugin runs, reads and sends
 
-- **The hook.** On session start, resume, `/clear` and compaction, Claude Code runs
+- **The hook.** On session start, resume, fork, `/clear` and compaction, Claude Code runs
   `node "${CLAUDE_PLUGIN_ROOT}/hooks/inject.mjs" <k>` four times (k = 0 to 3), because each hook's output is capped
   at 10,000 characters. Each run reads the hook input that Claude Code passes on stdin, for the session's directory.
   It looks for each `.brevity/` path it uses (the folder, and the files listed below) in the session's directory and
@@ -291,7 +291,7 @@ Copy `skills/brevity/` to `~/.agents/skills/brevity/` (Codex, Gemini CLI, Cursor
     `BREVITY_ARM`.
 
   It prints the arm's marker and files as context for the session, in parts under the cap, on every session start,
-  resume, `/clear` and compaction.
+  resume, fork, `/clear` and compaction.
 - **What it never does.** No network requests, no file writes, no other files or variables read.
 - **The skill.** Claude reads `skills/brevity/SKILL.md` and `SPEC.md` from the plugin and, when they exist, the
   project's `.brevity/` dictionaries.

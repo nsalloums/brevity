@@ -61,9 +61,11 @@ const brevityParts = (root) => [
   '', '',
 ];
 
-test('hooks.json registers four parts on startup, resume, clear and compact', () => {
+test('hooks.json registers four parts on startup, resume, clear, compact and fork', () => {
   assert.equal(hooks.length, 1);
-  assert.equal(hooks[0].matcher, 'startup|resume|clear|compact');
+  // Claude Code 2.1.214 and later reports a forked session (`--fork-session`, `/fork`, `/branch`) as `fork`, earlier
+  // versions as `resume`.
+  assert.equal(hooks[0].matcher, 'startup|resume|clear|compact|fork');
   assert.equal(commands.length, 4);
 });
 
@@ -127,7 +129,7 @@ test('a project that did not opt in gets nothing, whatever the arm', { skip: opt
   const root = project({ brevity: false });
   for (const arm of [undefined, 'brevity', 'lite', 'terse', 'off']) {
     const extra = arm ? { BREVITY_ARM: arm } : {};
-    for (const source of ['startup', 'resume', 'clear', 'compact']) assert.deepEqual(hook({ source, cwd: root }, { extra }), ['', '', '', ''], `${arm} ${source}`);
+    for (const source of ['startup', 'resume', 'clear', 'compact', 'fork']) assert.deepEqual(hook({ source, cwd: root }, { extra }), ['', '', '', ''], `${arm} ${source}`);
   }
   // BREVITY_ALWAYS=1 opts in without the folder, and the arm still applies.
   assert.deepEqual(hook({ source: 'startup', cwd: root }, { extra: { BREVITY_ALWAYS: '1', BREVITY_ARM: 'off' } }), ['<!-- brevity arm: off -->\n', '', '', '']);
@@ -148,11 +150,11 @@ test('.brevity/arm is read whatever wrote it: UTF-16 with a byte order mark, a U
   assert.deepEqual(hook({ source: 'startup', cwd: root }), lite, 'UTF-16 LE without a mark');
 });
 
-test('every SessionStart injects the current copy: a resume prints exactly what a startup prints', () => {
+test('every SessionStart injects the current copy: a resume or a fork prints exactly what a startup prints', () => {
   for (const arm of ['brevity', 'lite', 'terse', 'off']) {
     const root = project({ arm });
     const startup = hook({ hook_event_name: 'SessionStart', source: 'startup', cwd: root, session_id: 's-1' });
-    for (const source of ['resume', 'clear', 'compact']) {
+    for (const source of ['resume', 'clear', 'compact', 'fork']) {
       // The transcript path is passed, as Claude Code passes it, and not read.
       const input = { hook_event_name: 'SessionStart', source, cwd: root, session_id: 's-1', transcript_path: join(root, 'missing.jsonl') };
       assert.deepEqual(hook(input), startup, `${arm} ${source}`);

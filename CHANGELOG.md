@@ -7,6 +7,10 @@ evidence, compatibility and upgrade steps. Versions follow semantic versioning r
 
 Changes waiting on `next` for the next release (see [RELEASING.md](RELEASING.md)).
 
+- **#6, normal.** The hook now also runs when a session is forked (`--fork-session`, `/fork` or `/branch`), which
+  Claude Code 2.1.214 and later reports as the source `fork`. A fork kept its parent's copy, so after a plugin
+  update, a dictionary edit or an arm change it went on with the old one. It now gets the current copy, as a resume
+  does. An unchanged copy is not added twice: Claude Code drops identical items on a fork too.
 - **#52, normal.** `tools/meter.mjs` counts three heuristic quality signals per arm and for the team, each as a count
   and a rate per 100 delivered messages: clarification requests (`--clarify-window`, 5 calls by default), corrections
   and re-sends. Numbers only, as before.
