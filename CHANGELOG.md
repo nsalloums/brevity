@@ -20,6 +20,9 @@ Changes waiting on `next` for the next release (see [RELEASING.md](RELEASING.md)
   `docs/costs.md` and `eval/RESULTS.md` figures are rerun: a 200-call session breaks even at 64-92 messages, not
   76-101 (104-149 at a single pass's 37, not 123-164), and the hub team's largest read-only card is 276 tokens, not
   309, so the 300-token card loses.
+- **#52, normal.** `tools/meter.mjs` counts three heuristic quality signals per arm and for the team, each as a count
+  and a rate per 100 delivered messages: clarification requests (`--clarify-window`, 5 calls by default), corrections
+  and re-sends. Numbers only, as before.
 
 ## [0.6.0] - 2026-10-10
 

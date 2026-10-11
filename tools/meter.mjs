@@ -2,7 +2,7 @@
 // brevity meter: what brevity cost and saved in a project's real Claude Code sessions, read from their transcripts.
 //
 //   node tools/meter.mjs [--project <dir>]... [--since <ISO time>] [--until <ISO time>] [--saving-ratio <r>]
-//        [--input 1] [--output 5] [--write-5m 1.25] [--write-1h 2] [--read <r>]
+//        [--input 1] [--output 5] [--write-5m 1.25] [--write-1h 2] [--read <r>] [--clarify-window 5]
 //        [--titles] [--json] [--team-json <file>]
 //
 // Input: Claude Code's transcripts, one JSON object per line, under ~/.claude/projects (or $CLAUDE_CONFIG_DIR/projects).
@@ -65,6 +65,34 @@
 //   priced like a copy: the write rate where the call writes it to the cache (the receiver's first call, the sender's
 //   next call, idle misses), the read price elsewhere. Unlike tools/cost-model.mjs, this includes the sender's own
 //   cache write.
+// - Quality signals, heuristics (issue #52). No prose original or audit exists for real traffic, so three signals
+//   flag delivered SendMessage messages that may not have been understood. A received message is matched to its
+//   send by msg_id, else by text: the only send with that text, else the only one whose sender has the name the
+//   message gives ("from" or "name"; a session's names are its title and what other sessions call it in linked
+//   messages). When that stays ambiguous, the message is not matched and flags nothing. A reply's addressee is matched
+//   by the transcript that received it, or by name (SendMessage's "to" against the sender's "from" or "name", without
+//   a trailing "[hex]" tag, and a name cut short with "…" matches what it starts). In a transcript that continues a
+//   session under a new id or forks it, copied messages are not owned, so their signals go to the original. A
+//   message is:
+//   - clarified, when the recipient's next message to its sender, sent within the recipient's next --clarify-window
+//     calls (5) after the message arrives, asks about it. The reply says "please clarify", "unclear to me" or "not
+//     clear to me", or it has a question (a sentence that ends with "?", or an ASK line) that either holds a
+//     clarification word (unclear, did you mean, do you mean, what do you mean, which one, clarify, clarification), or
+//     names something from the message (a #N, a SHA, a path or file name, a --flag, a vX.Y.Z tag, a quoted or `code`
+//     span) or quotes a span of it.
+//     A question that asks leave for the recipient's own step ("May I ...", "Can I ...", "Could I ...", "Shall I ...",
+//     "OK to ...", or an ASK line "ASK I ...") names nothing. When several messages from the sender arrived since the recipient last wrote to it, the newest
+//     one that the reply asks about is the one clarified;
+//   - corrected, when its sender's next delivered message to the same recipient corrects or retracts something it
+//     sent: "correction", "I was wrong", "disregard my last" or "ignore my previous", "retract", "-> WITHDRAWN", or a
+//     FIX line that does not say "your" (one that does corrects the recipient). It can correct an earlier message
+//     than this one, and it can be an update of an instruction rather than a mistake;
+//   - resent, when it repeats an earlier delivered message to the same recipient, with no message from that recipient
+//     in between: a similarity of 0.8 or more (Dice's coefficient over word pairs).
+//   A failed send is never one of them. Delegation prompts are not checked. A clarification about a message from a
+//   transcript that was not measured is not counted, since that message is not among the delivered ones either.
+//   These rules were tuned on brevity's own transcripts, and their precision there (on 2026-10-10, 4 of 5 flagged
+//   corrections real, the fifth only using the word; no clarification flagged) is in-sample, not a validation.
 //
 // Token counts use @anthropic-ai/tokenizer, the legacy tokenizer behind eval/RESULTS.md's counts, when it is installed
 // where this file can import it: run npm i -D @anthropic-ai/tokenizer in the brevity checkout that holds this tool,
@@ -89,6 +117,28 @@ const SPEC_MARK = '<!-- brevity SPEC.md';
 const ARM_MARK = /<!-- brevity arm: (\w+) -->/;
 const SKILL_ENTRY = /(?:^|\n)(- brevity:brevity\b[^\n]*(?:\n(?!- )[^\n]*)*)/;
 const DELEGATION = /(?:^|__)spawn_task$/;
+// The quality signals' defaults (see the header): how many of the recipient's calls a clarification may come within,
+// and how alike a re-sent message is.
+export const CLARIFY_WINDOW = 5;
+export const RESEND_SIMILARITY = 0.8;
+const CLARIFY = /\b(?:unclear|did you mean|do you mean|what do you mean|which one|clarify|clarification)\b/i;
+const CLARIFY_ASK = /\b(?:please clarify|unclear to me|not clear to me)\b/i;
+const LEAD = /^\s*(?:[-*]\s+|\d+\.\s+)?(?:@\S+\s+)?/;
+const ASK_LINE = new RegExp(`${LEAD.source}ASK\\d*(?=[\\s:;]|$)`);
+// A question that asks leave for the recipient's own next step ("May I add x?", "ASK I add x") asks nothing about
+// the message. A prose question that starts with "I" is not one.
+const LEAVE = new RegExp(`${LEAD.source}(?:ASK\\d*:?\\s+I\\s|(?:ASK\\d*:?\\s+)?(?:(?:may|can|could|shall)\\s+I\\b|ok(?:ay)?\\s+(?:to|if)\\b))`, 'i');
+const FIX_LINE = new RegExp(`${LEAD.source}FIX(?=[\\s:;]|$)`);
+const CORRECTION = [
+  /\bcorrection\b/i, /\bI was wrong\b/i, /\b(?:disregard|ignore) my (?:last|previous)\b/i, /\bretract(?:s|ed|ing)?\b/i,
+  /->\s*WITHDRAWN\b/,
+];
+// What a question can name from a message: #N, SHAs, paths and branches, file names, --flags, vX.Y.Z tags, quoted spans.
+const QUOTED = /`([^`\n]+)`|"([^"\n]{3,})"|“([^”\n]{3,})”|«([^»\n]{3,})»/g;
+const NAMED = [
+  /#\d+/g, /\b(?=[0-9a-f]*\d)(?=[0-9a-f]*[a-f])[0-9a-f]{7,40}\b/g, /[\w.-]+(?:\/[\w.-]+)+/g, /\b[\w-]{2,}\.[A-Za-z]{1,5}\b/g,
+  /--[a-z][\w-]*/g, /\bv\d+\.\d+\.\d+\b/g,
+];
 
 export async function tokenizer() {
   try {
@@ -108,6 +158,67 @@ export async function tokenizer() {
 // Whether a message is brevity: a line after its first starts with a section 3 verb.
 export function isBrevity(text) {
   return String(text ?? '').replace(/\r\n/g, '\n').trimStart().split('\n').slice(1).some((l) => VERB_LINE.test(l));
+}
+
+// The questions in a message: its sentences that end with a word and "?" (not code such as `a ?? b`), and its ASK lines.
+function questions(text) {
+  const out = [];
+  for (const line of String(text ?? '').replace(/\r\n/g, '\n').split('\n')) {
+    if (ASK_LINE.test(line)) out.push(line);
+    else for (const s of line.split(/(?<=[.!?])\s+/)) if (/[\p{L}\p{N}`'"»”)\]]\?[)"'`»”]*\s*$/u.test(s)) out.push(s);
+  }
+  return out;
+}
+
+const quoted = (text) => [...String(text).matchAll(QUOTED)].map((m) => m.slice(1).find((x) => x !== undefined).trim()).filter((x) => x.length >= 3);
+const escape = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+// Whether `text` holds `name` as a whole word: #5 is not in #52.
+const holds = (text, name) => new RegExp(`(?<![\\w])${escape(name)}(?![\\w])`, 'i').test(text);
+
+// Whether `reply` asks about `received` (see the header): a question with a clarification word, or one that names
+// something from it or quotes it and does not ask leave for the recipient's own step.
+export function isClarification(reply, received) {
+  const r = String(reply ?? '');
+  const m = String(received ?? '');
+  if (CLARIFY_ASK.test(r)) return true;
+  const qs = questions(r);
+  if (qs.some((q) => CLARIFY.test(q))) return true;
+  const named = NAMED.flatMap((re) => m.match(re) ?? []).map((x) => x.replace(/[.-]+$/, ''));
+  const names = [...new Set([...quoted(m), ...named])].filter(Boolean);
+  return qs.filter((q) => !LEAVE.test(q))
+    .some((q) => names.some((x) => holds(q, x)) || quoted(q).some((x) => m.toLowerCase().includes(x.toLowerCase())));
+}
+
+// Whether a message corrects or retracts something its sender sent before: a correction phrase, or a FIX line that
+// does not correct the recipient's words ("FIX your ...").
+export function isCorrection(text) {
+  const t = String(text ?? '');
+  return CORRECTION.some((re) => re.test(t)) || t.split(/\r?\n/).some((l) => FIX_LINE.test(l) && !/\byours?\b/i.test(l));
+}
+
+// Dice's coefficient over the word pairs of two texts (over the words, for a one-word text): 1 for the same words.
+export function similarity(a, b) {
+  const pairs = (t) => {
+    const w = String(t ?? '').toLowerCase().match(/[\p{L}\p{N}#_/-]+(?:\.[\p{L}\p{N}_/-]+)*/gu) ?? [];
+    return new Set(w.length < 2 ? w : w.slice(1).map((x, i) => `${w[i]} ${x}`));
+  };
+  const A = pairs(a);
+  const B = pairs(b);
+  if (!A.size || !B.size) return 0;
+  let both = 0;
+  for (const x of A) if (B.has(x)) both++;
+  return (2 * both) / (A.size + B.size);
+}
+
+// Whether two lists of session names (SendMessage's to and recipient, or a peer message's from and name) share one.
+// A trailing "[hex]" tag is left out, and a name cut short with "…" matches the names it starts.
+export function samePeer(xs, ys) {
+  const norm = (s) => String(s ?? '').trim().toLowerCase().replace(/\s*\[[0-9a-f]{4,}\]$/, '');
+  const cut = (a, b) => /(?:…|\.\.\.)$/.test(a) && b.startsWith(a.replace(/(?:…|\.\.\.)$/, '').trimEnd());
+  for (const x of (xs ?? []).map(norm).filter(Boolean)) {
+    for (const y of (ys ?? []).map(norm).filter(Boolean)) if (x === y || cut(x, y) || cut(y, x)) return true;
+  }
+  return false;
 }
 
 export function readPrice(model, prices = {}) {
@@ -331,7 +442,8 @@ class Transcript {
     const P = prompt(u);
     const read = u.cache_read_input_tokens ?? 0;
     const owned = this.claim(this.ctx.calls, id);
-    const call = { id, model: o.message.model, usage: u, ts: o.timestamp, counted: owned && this.within(o.timestamp), index: null };
+    // `ord` numbers every call in the transcript, counted or not: the quality signals' window counts in it.
+    const call = { id, model: o.message.model, usage: u, ts: o.timestamp, counted: owned && this.within(o.timestamp), index: null, ord: this.calls.size };
     this.calls.set(id, call);
 
     // A resume, or a prompt that shrank without a compaction, rebuilt the conversation.
@@ -395,10 +507,11 @@ class Transcript {
   message(dir, text, key, o, counted) {
     const t = str(text);
     const owned = this.claim(this.ctx.lines, key);
-    // What this session writes is written under its arm; what it receives, under the sender's (see settle).
+    // What this session writes is written under its arm; what it receives, under the sender's (see settle). The text,
+    // the names of the other session and the msg_id serve the quality signals, and are removed with the hash.
     return this.add({
       kind: 'msg', dir, owned, counted: owned && counted, tokens: this.ctx.count(t), brevity: isBrevity(t), hash: hash(t),
-      arm: WRITTEN.includes(dir) ? this.arm() : null, outputRate: 0, failed: false,
+      arm: WRITTEN.includes(dir) ? this.arm() : null, outputRate: 0, failed: false, text: t, peer: [], msgId: null, ord: null,
     }, o);
   }
 
@@ -410,7 +523,9 @@ class Transcript {
       if (this.peerIds.has(id)) return;
       this.peerIds.add(id);
     }
-    this.message(origin.handback ? 'handback' : 'received', origin.body ?? text, id ?? o.uuid, o, this.within(o.timestamp));
+    const item = this.message(origin.handback ? 'handback' : 'received', origin.body ?? text, id ?? o.uuid, o, this.within(o.timestamp));
+    // It reaches the session's next call.
+    Object.assign(item, { peer: [origin.from, origin.name], msgId: id ?? null, ord: this.calls.size });
   }
 
   toolUse(b, o, call) {
@@ -422,6 +537,8 @@ class Transcript {
     else return;
     // The sender writes it as output in this call, and carries it from the next one.
     item.callIndex = call.index;
+    item.ord = call.ord;
+    if (name === 'SendMessage') item.peer = [b.input?.to, b.input?.recipient];
     if (item.counted) item.outputRate = this.ctx.prices.output;
     if (item.counted && call.loaded) item.outputRateLoaded = this.ctx.prices.output;
     this.tools.set(b.id, item);
@@ -474,6 +591,7 @@ class Transcript {
     for (const b of blocks) {
       const item = b?.type === 'tool_result' ? this.tools.get(b.tool_use_id) : undefined;
       if (item?.dir === 'sent' && (o.toolUseResult?.success === false || b.is_error === true)) item.failed = true;
+      else if (item?.dir === 'sent' && o.toolUseResult?.msg_id !== undefined) item.msgId = o.toolUseResult.msg_id;
     }
     const plain = !o.isMeta && !o.isCompactSummary && !blocks.some((b) => b?.type === 'tool_result');
     if (!this.firstHuman && (origin.kind === 'human' || (!o.origin && plain))) {
@@ -525,11 +643,12 @@ class Transcript {
       rewriteCost: rewrites.reduce((a, i) => a + i.tokens * i.rewriteRate, 0),
       drops: this.drops,
       duplicates: this.dups.map((d) => ({ ...d })),
-      // The rates and the hash are settled into each message's style and saving, then removed (see settle).
+      // The rates and the hash are settled into each message's style and saving, and the text, names, msg_id and call
+      // number into its quality signals; then all of them are removed (see signals and settle).
       messages: msgs.map((i) => ({
         dir: i.dir, owned: i.owned, counted: i.counted, brevity: i.brevity, arm: i.arm, tokens: i.tokens, failed: i.failed,
         rate: i.rate, outputRate: i.outputRate, rateLoaded: i.rateLoaded, outputRateLoaded: i.outputRateLoaded,
-        callIndex: i.callIndex ?? null, ts: i.ts, hash: i.hash,
+        callIndex: i.callIndex ?? null, ts: i.ts, hash: i.hash, text: i.text, peer: i.peer, msgId: i.msgId, ord: i.ord,
       })),
       first: this.firstHuman ? {
         owned: this.firstHuman.owned, counted: this.firstHuman.counted, rate: this.firstHuman.rate, rateLoaded: this.firstHuman.rateLoaded,
@@ -541,7 +660,7 @@ class Transcript {
 }
 
 // Reads every transcript and returns one record per transcript; see the header for what each number means.
-export async function meter(sources, { count, prices = PRICES, ratios, ratio, since, until } = {}) {
+export async function meter(sources, { count, prices = PRICES, ratios, ratio, since, until, clarifyWindow = CLARIFY_WINDOW } = {}) {
   // `ratio`, the single ratio of earlier versions, stands for every compressed style.
   ratios ??= ratio === undefined ? SAVING_RATIOS : { brevity: ratio, lite: ratio, terse: ratio, off: 0 };
   const ctx = { count, prices, since, until, calls: new Set(), lines: new Set() };
@@ -565,8 +684,89 @@ export async function meter(sources, { count, prices = PRICES, ratios, ratio, si
       records.push(r);
     }
   }
+  signals(records, clarifyWindow);
   settle(records, ratios);
   return records;
+}
+
+// The quality signals of every delivered SendMessage message (see the header): clarified, corrected and resent.
+function signals(records, window) {
+  const byId = new Map(); // msg_id to the delivered message
+  const byText = new Map(); // text hash to the owned delivered messages with that text
+  const senderOf = new Map(); // delivered message to the record that sent it
+  const receiverOf = new Map(); // msg_id to the record that received it
+  const names = new Map(); // record to its title and the names that other sessions give it
+  // A transcript that continues a session under a new id, or forks it, copies its lines without owning them: the
+  // msg_id belongs to the transcript that owns the line.
+  const keep = (map, key, value, owned) => {
+    const had = map.get(key);
+    if (key !== null && key !== undefined && (!had || (owned && !had.owned))) map.set(key, { value, owned });
+  };
+  const at = (map, key) => (key === null || key === undefined ? undefined : map.get(key)?.value);
+  for (const r of records) {
+    names.set(r, [r.title]);
+    for (const m of r.messages) {
+      if (m.dir === 'sent') m.clarified = m.corrected = m.resent = false;
+      if (m.dir === 'sent' && !m.failed) {
+        senderOf.set(m, r);
+        keep(byId, m.msgId, m, m.owned);
+        if (m.owned) byText.set(m.hash, [...(byText.get(m.hash) ?? []), m]);
+      } else if (m.dir === 'received') keep(receiverOf, m.msgId, r, m.owned);
+    }
+  }
+  // What a receiver calls the sender of a message, and what a sender calls its recipient.
+  for (const r of records) {
+    for (const m of r.messages) {
+      if (m.dir === 'received' && at(byId, m.msgId)) names.get(senderOf.get(at(byId, m.msgId))).push(...m.peer);
+      if (m.dir === 'sent' && at(receiverOf, m.msgId)) names.get(at(receiverOf, m.msgId)).push(...m.peer);
+    }
+  }
+  // The owned, delivered send that a message is or copies: by msg_id, else the only send with its text, else the only
+  // one of those whose sender (for a received message) or recipient (for a sent copy) has the name the message gives.
+  const original = (m) => {
+    if (at(byId, m.msgId)) return at(byId, m.msgId);
+    const all = byText.get(m.hash) ?? [];
+    if (all.length === 1) return all[0];
+    const fits = all.filter((c) => samePeer(m.dir === 'sent' ? c.peer : names.get(senderOf.get(c)), m.peer));
+    return fits.length === 1 ? fits[0] : undefined;
+  };
+  // Whether a received message comes from the session a sent one goes to.
+  const from = (m, n) => {
+    const s = senderOf.get(original(m));
+    return (!!s && s === at(receiverOf, n.msgId)) || samePeer(m.peer, n.peer);
+  };
+  const sameTo = (a, b) => {
+    const t = at(receiverOf, a.msgId);
+    return (!!t && t === at(receiverOf, b.msgId)) || samePeer(a.peer, b.peer);
+  };
+  const delivered = (m) => m.dir === 'sent' && !m.failed;
+  for (const r of records) {
+    const ms = r.messages.filter((m) => m.dir === 'sent' || m.dir === 'received');
+    ms.forEach((n, j) => {
+      if (!delivered(n)) return;
+      // Clarified: what n's recipient sent this session since this session last wrote to it, newest first.
+      if (n.owned) {
+        for (let i = j - 1; i >= 0; i--) {
+          const m = ms[i];
+          if (delivered(m) && sameTo(m, n)) break;
+          if (m.dir !== 'received' || !from(m, n)) continue;
+          if (n.ord - m.ord >= window) break;
+          const asked = original(m);
+          if (asked && isClarification(n.text, m.text)) { asked.clarified = true; break; }
+        }
+      }
+      // Corrected: this session's next delivered message to the same recipient corrects n. In a transcript that
+      // continues or forks the session, n is a copy, and the owned original is the one counted.
+      const next = ms.slice(j + 1).find((m) => delivered(m) && sameTo(n, m));
+      if (next && isCorrection(next.text)) (n.owned ? n : original(n) ?? n).corrected = true;
+      // Resent: n repeats an earlier message to the same recipient, with no message from it in between.
+      for (let i = j - 1; i >= 0; i--) {
+        const m = ms[i];
+        if (m.dir === 'received' && from(m, n)) break;
+        if (delivered(m) && sameTo(m, n) && similarity(m.text, n.text) >= RESEND_SIMILARITY) { n.resent = true; break; }
+      }
+    });
+  }
 }
 
 const SENT = ['sent', 'delegation-sent'];
@@ -613,8 +813,8 @@ function settle(records, ratios) {
       const s = (m.tokens * m.ratio) / (1 - m.ratio);
       m.saving = s * (m.rate + m.outputRate);
       m.savingLoaded = s * (m.rateLoaded + m.outputRateLoaded);
-      // Keep numbers only: no message text or fingerprints leave this function.
-      for (const key of ['rate', 'outputRate', 'rateLoaded', 'outputRateLoaded', 'hash']) delete m[key];
+      // Keep numbers only: no message text, session names or fingerprints leave this function.
+      for (const key of ['rate', 'outputRate', 'rateLoaded', 'outputRateLoaded', 'hash', 'text', 'peer', 'msgId', 'ord']) delete m[key];
     }
     delete r.first;
   }
@@ -647,8 +847,17 @@ function tally(r) {
     handbacks: of(['handback']).length,
     messageTokens: [...sent, ...received].reduce((a, m) => a + m.tokens, 0),
     brevityTokens: [...sent, ...received].filter((m) => m.style === 'brevity').reduce((a, m) => a + m.tokens, 0),
+    // The quality signals, heuristics: of the SendMessage deliveries, how many were clarified, corrected or resent.
+    delivered: deliveries.length,
+    clarified: deliveries.filter((m) => m.clarified).length,
+    corrected: deliveries.filter((m) => m.corrected).length,
+    resent: deliveries.filter((m) => m.resent).length,
   };
 }
+
+const SIGNALS = ['clarified', 'corrected', 'resent'];
+// Each signal per 100 SendMessage deliveries, or null without any.
+const per100 = (x) => (x.delivered ? Object.fromEntries(SIGNALS.map((k) => [k, (100 * x[k]) / x.delivered])) : null);
 
 function summarize(records) {
   const sum = (key) => records.reduce((a, r) => a + r[key], 0);
@@ -664,6 +873,7 @@ function summarize(records) {
   // Each share divides what the calls with an arm loaded billed for it by what those same calls billed in all.
   const b = out.billLoaded;
   out.shareOfLoadedBill = b ? { specCost: out.specCostLoaded / b, saving: out.savingLoaded / b, net: out.netLoaded / b } : null;
+  out.per100 = per100({ delivered: out.delivered ?? 0, clarified: out.clarified, corrected: out.corrected, resent: out.resent });
   return out;
 }
 
@@ -676,7 +886,7 @@ export function perArm(sessions, ratios) {
     const t = r.tally;
     const a = (arms[r.arm] ??= {
       ratio: r.arm in ratios ? ratios[r.arm] : null, sessions: [], calls: 0, bill: 0, loadCost: 0, sent: 0, received: 0,
-      compressed: 0, saving: 0, net: 0,
+      compressed: 0, saving: 0, net: 0, delivered: 0, clarified: 0, corrected: 0, resent: 0,
     });
     a.sessions.push(r.id);
     a.calls += r.calls;
@@ -687,9 +897,11 @@ export function perArm(sessions, ratios) {
     a.compressed += r.messages.filter((m) => m.counted && !m.failed && [...SENT, ...RECEIVED].includes(m.dir) && compressed(m)).length;
     a.saving += r.saving;
     a.net += r.net;
+    for (const k of ['delivered', ...SIGNALS]) a[k] += t[k];
   }
   for (const a of Object.values(arms)) {
     a.shareOfBill = a.bill ? { loadCost: a.loadCost / a.bill, saving: a.saving / a.bill, net: a.net / a.bill } : null;
+    a.per100 = per100(a);
   }
   return arms;
 }
@@ -710,7 +922,8 @@ export function teamSessions(team) {
 
 function parseArgs(argv) {
   const opts = { project: [] };
-  const valued = ['--project', '--since', '--until', '--saving-ratio', '--input', '--output', '--write-5m', '--write-1h', '--read', '--team-json'];
+  const valued = ['--project', '--since', '--until', '--saving-ratio', '--input', '--output', '--write-5m', '--write-1h', '--read', '--team-json',
+    '--clarify-window'];
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (valued.includes(a)) {
@@ -732,6 +945,11 @@ function parseArgs(argv) {
     if (!Number.isFinite(v) || v < 0 || (key === 'saving-ratio' && v >= 1)) throw new Error(`--${key} must be a number >= 0${key === 'saving-ratio' ? ' and < 1' : ''}`);
     opts[key] = v;
   }
+  if (opts['clarify-window'] !== undefined) {
+    const v = Number(opts['clarify-window']);
+    if (!Number.isInteger(v) || v < 1) throw new Error('--clarify-window must be a whole number of calls >= 1');
+    opts['clarify-window'] = v;
+  }
   return opts;
 }
 
@@ -750,7 +968,8 @@ export async function run(argv, { cwd = process.cwd(), home = process.env.CLAUDE
   for (const d of dirs) if (!existsSync(d)) throw new Error(`no such folder: ${d}`);
   if (!dirs.length) throw new Error(`no Claude Code project folder for ${resolve(cwd)} under ${root}; name one with --project`);
   const sources = transcripts(dirs);
-  const records = await meter(sources, { count: tok.count, prices, ratios, since: o.since, until: o.until });
+  const clarifyWindow = o['clarify-window'] ?? CLARIFY_WINDOW;
+  const records = await meter(sources, { count: tok.count, prices, ratios, since: o.since, until: o.until, clarifyWindow });
   for (const r of records) {
     r.specCost = r.copyCost + r.skillCost;
     r.saving = r.messages.reduce((a, m) => a + m.saving, 0);
@@ -788,6 +1007,8 @@ export async function run(argv, { cwd = process.cwd(), home = process.env.CLAUDE
     tests: { sessions: tests, total: summarize(tests) },
     subagents: { total: summarize(subagents) },
     duplicates: team.flatMap((r) => r.duplicates.map((d) => ({ session: r.id.slice(0, 8), ...d }))),
+    // The quality signals are heuristics: their counts are in each tally, total and arm, with per100.
+    signals: { heuristic: true, clarifyWindow, resendSimilarity: RESEND_SIMILARITY },
     titles: !!o.titles,
   };
   if (o['team-json']) {
@@ -885,6 +1106,21 @@ export function render(r) {
       ...Object.entries(r.team.arms).map(([arm, a]) => [arm, a.ratio ?? '-', fmt(a.sessions.length), fmt(a.calls), fmt(a.bill), fmt(a.loadCost),
         share(a, 'loadCost'), fmt(a.sent), fmt(a.received), fmt(a.saving), share(a, 'saving'), signed(a.net), share(a, 'net')]),
     ]));
+
+    const s = r.signals;
+    out.push('', 'quality signals, heuristics: SendMessage deliveries that may not have been understood, per arm and for the team '
+      + '(n and per 100 delivered):');
+    const rate = (x, key) => (x.per100 ? x.per100[key].toFixed(1) : '-');
+    const signalRow = (name, x) => [name, fmt(x.delivered), ...SIGNALS.flatMap((k) => [fmt(x[k]), rate(x, k)])];
+    out.push(table([
+      ['arm', 'delivered', 'clarified', '/100', 'corrected', '/100', 'resent', '/100'],
+      ...Object.entries(r.team.arms).map(([arm, a]) => signalRow(arm, a)),
+      signalRow('team', t),
+    ]));
+    out.push(`clarified = the recipient's next message to the sender, within its next ${plural(s.clarifyWindow, 'call')}, asks `
+      + 'about it; corrected = the sender\'s next message to the same recipient corrects or retracts it; resent = it repeats an '
+      + `earlier message to the same recipient (similarity >= ${s.resendSimilarity}) with no reply in between. The rules are in the `
+      + 'header of tools/meter.mjs; they miss some cases and flag others wrongly.');
   }
   out.push('', r.duplicates.length ? 'duplicated copies (two or more in one context, issue #39):' : 'duplicated copies: none');
   for (const d of r.duplicates) {
@@ -908,7 +1144,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
     console.log(process.argv.includes('--json') ? JSON.stringify(r, null, 2) : render(r));
   } catch (e) {
     console.error(`error: ${e.message}`);
-    console.error('usage: meter.mjs [--project dir]... [--since ISO] [--until ISO] [--saving-ratio r] [--titles] [--json] [--team-json file]; see the header of tools/meter.mjs');
+    console.error('usage: meter.mjs [--project dir]... [--since ISO] [--until ISO] [--saving-ratio r] [--clarify-window calls] [--titles] [--json] [--team-json file]; see the header of tools/meter.mjs');
     process.exit(2);
   }
 }
