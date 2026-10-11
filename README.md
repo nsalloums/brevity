@@ -168,7 +168,9 @@ and the output gives the command that compares the model with the measurement.
 Cost alone favours the smallest load, so the meter also counts three quality signals, per arm and for the team: the
 count and the rate per 100 delivered SendMessage messages. They are heuristics, read from the text of the messages
 and the replies around them. They miss some cases and flag others wrongly, so treat them as pointers to check by
-hand, not as a measure of loss. A delivered message is:
+hand, not as a measure of loss. The rules were tuned on this project's own transcripts. On those, the 4 corrections
+they flag all match the rule (2 fix a mistake, 2 update an instruction), and they flag no clarification. That is an
+in-sample check, not a validation: nothing has measured them on other traffic yet. A delivered message is:
 
 - **clarified** when the recipient's next message to the sender, sent within its next 5 calls
   (`--clarify-window`), asks about it. That reply asks a question with "did you mean", "which one", "unclear" or

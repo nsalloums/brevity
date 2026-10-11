@@ -87,6 +87,8 @@
 //     in between: a similarity of 0.8 or more (Dice's coefficient over word pairs).
 //   A failed send is never one of them. Delegation prompts are not checked. A clarification about a message from a
 //   transcript that was not measured is not counted, since that message is not among the delivered ones either.
+//   These rules were tuned on brevity's own transcripts, and their precision there (4 of 4 flagged corrections match
+//   the rule; no clarification flagged) is in-sample, not a validation.
 //
 // Token counts use @anthropic-ai/tokenizer, the legacy tokenizer behind eval/RESULTS.md's counts, when it is installed
 // where this file can import it: run npm i -D @anthropic-ai/tokenizer in the brevity checkout that holds this tool,
