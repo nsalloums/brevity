@@ -183,9 +183,10 @@ and the output gives the command that compares the model with the measurement.
 Cost alone favours the smallest load, so the meter also counts three quality signals, per arm and for the team: the
 count and the rate per 100 delivered SendMessage messages. They are heuristics, read from the text of the messages
 and the replies around them. They miss some cases and flag others wrongly, so treat them as pointers to check by
-hand, not as a measure of loss. The rules were tuned on this project's own transcripts. On those, the 4 corrections
-they flag all match the rule (2 fix a mistake, 2 update an instruction), and they flag no clarification. That is an
-in-sample check, not a validation: nothing has measured them on other traffic yet. A delivered message is:
+hand, not as a measure of loss. The rules were tuned on this project's own transcripts. On those, as of 2026-10-10,
+4 of the 5 corrections they flag are real (2 fix a mistake, 2 update an instruction; the fifth only uses the word),
+and they flag no clarification. That is an in-sample check, not a validation: nothing has measured them on other
+traffic yet. A delivered message is:
 
 - **clarified** when the recipient's next message to the sender, sent within its next 5 calls
   (`--clarify-window`), asks about it. That reply asks a question with "did you mean", "which one", "unclear" or
@@ -196,10 +197,11 @@ in-sample check, not a validation: nothing has measured them on other traffic ye
 - **resent** when the sender sends almost the same text to the same recipient again (a similarity of 0.8 or more)
   without a reply in between.
 
-The meter matches each message to its recipient by the `msg_id` that both transcripts log, else by its text, and
-matches a reply to its addressee by name. A failed send never counts. Delegation prompts are not checked. The exact
-rules are in the header of [tools/meter.mjs](tools/meter.mjs). Like the rest of the output, the signals are numbers
-only: the meter never prints message text or session names.
+The meter matches each message to its recipient by the `msg_id` that both transcripts log, else by its text. When
+two sessions sent the same text, it uses the sender's name, and if that stays ambiguous the message flags nothing.
+It matches a reply to its addressee by name. A failed send never counts. Delegation prompts are not checked. The
+exact rules are in the header of [tools/meter.mjs](tools/meter.mjs). Like the rest of the output, the signals are
+numbers only: the meter never prints message text, and prints session titles only with `--titles`.
 
 ## Where it works
 

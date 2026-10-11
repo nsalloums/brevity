@@ -66,18 +66,22 @@
 //   next call, idle misses), the read price elsewhere. Unlike tools/cost-model.mjs, this includes the sender's own
 //   cache write.
 // - Quality signals, heuristics (issue #52). No prose original or audit exists for real traffic, so three signals
-//   flag delivered SendMessage messages that may not have been understood. A message's recipient and sender are
-//   matched by msg_id, else by text, across the measured transcripts; a reply's addressee by the transcript that
-//   received it, or by name (SendMessage's "to" against the sender's "from" or "name", without a trailing
-//   "[hex]" tag, and a name cut short with "…" matches what it starts). A message is:
+//   flag delivered SendMessage messages that may not have been understood. A received message is matched to its
+//   send by msg_id, else by text: the only send with that text, else the only one whose sender has the name the
+//   message gives ("from" or "name"; a session's names are its title and what other sessions call it in linked
+//   messages). When that stays ambiguous, the message is not matched and flags nothing. A reply's addressee is matched
+//   by the transcript that received it, or by name (SendMessage's "to" against the sender's "from" or "name", without
+//   a trailing "[hex]" tag, and a name cut short with "…" matches what it starts). In a transcript that continues a
+//   session under a new id or forks it, copied messages are not owned, so their signals go to the original. A
+//   message is:
 //   - clarified, when the recipient's next message to its sender, sent within the recipient's next --clarify-window
 //     calls (5) after the message arrives, asks about it. The reply says "please clarify", "unclear to me" or "not
 //     clear to me", or it has a question (a sentence that ends with "?", or an ASK line) that either holds a
 //     clarification word (unclear, did you mean, do you mean, what do you mean, which one, clarify, clarification), or
 //     names something from the message (a #N, a SHA, a path or file name, a --flag, a vX.Y.Z tag, a quoted or `code`
 //     span) or quotes a span of it.
-//     A question that asks leave for the recipient's own step ("May I ...", "Can I ...", "OK to ...", "ASK I ...")
-//     names nothing. When several messages from the sender arrived since the recipient last wrote to it, the newest
+//     A question that asks leave for the recipient's own step ("May I ...", "Can I ...", "Could I ...", "Shall I ...",
+//     "OK to ...", or an ASK line "ASK I ...") names nothing. When several messages from the sender arrived since the recipient last wrote to it, the newest
 //     one that the reply asks about is the one clarified;
 //   - corrected, when its sender's next delivered message to the same recipient corrects or retracts something it
 //     sent: "correction", "I was wrong", "disregard my last" or "ignore my previous", "retract", "-> WITHDRAWN", or a
@@ -87,8 +91,8 @@
 //     in between: a similarity of 0.8 or more (Dice's coefficient over word pairs).
 //   A failed send is never one of them. Delegation prompts are not checked. A clarification about a message from a
 //   transcript that was not measured is not counted, since that message is not among the delivered ones either.
-//   These rules were tuned on brevity's own transcripts, and their precision there (4 of 4 flagged corrections match
-//   the rule; no clarification flagged) is in-sample, not a validation.
+//   These rules were tuned on brevity's own transcripts, and their precision there (on 2026-10-10, 4 of 5 flagged
+//   corrections real, the fifth only using the word; no clarification flagged) is in-sample, not a validation.
 //
 // Token counts use @anthropic-ai/tokenizer, the legacy tokenizer behind eval/RESULTS.md's counts, when it is installed
 // where this file can import it: run npm i -D @anthropic-ai/tokenizer in the brevity checkout that holds this tool,
@@ -121,9 +125,9 @@ const CLARIFY = /\b(?:unclear|did you mean|do you mean|what do you mean|which on
 const CLARIFY_ASK = /\b(?:please clarify|unclear to me|not clear to me)\b/i;
 const LEAD = /^\s*(?:[-*]\s+|\d+\.\s+)?(?:@\S+\s+)?/;
 const ASK_LINE = new RegExp(`${LEAD.source}ASK\\d*(?=[\\s:;]|$)`);
-// A question that asks leave for the recipient's own next step ("May I add x?", "ASK I add x?") asks nothing about
-// the message.
-const LEAVE = new RegExp(`${LEAD.source}(?:ASK\\d*:?\\s+)?(?:(?:may|can|could|shall)\\s+I\\b|ok(?:ay)?\\s+(?:to|if)\\b|I\\s)`, 'i');
+// A question that asks leave for the recipient's own next step ("May I add x?", "ASK I add x") asks nothing about
+// the message. A prose question that starts with "I" is not one.
+const LEAVE = new RegExp(`${LEAD.source}(?:ASK\\d*:?\\s+I\\s|(?:ASK\\d*:?\\s+)?(?:(?:may|can|could|shall)\\s+I\\b|ok(?:ay)?\\s+(?:to|if)\\b))`, 'i');
 const FIX_LINE = new RegExp(`${LEAD.source}FIX(?=[\\s:;]|$)`);
 const CORRECTION = [
   /\bcorrection\b/i, /\bI was wrong\b/i, /\b(?:disregard|ignore) my (?:last|previous)\b/i, /\bretract(?:s|ed|ing)?\b/i,
@@ -687,28 +691,53 @@ export async function meter(sources, { count, prices = PRICES, ratios, ratio, si
 
 // The quality signals of every delivered SendMessage message (see the header): clarified, corrected and resent.
 function signals(records, window) {
-  const sends = new Map(); // msg_id, else text hash, to the delivered message
+  const byId = new Map(); // msg_id to the delivered message
+  const byText = new Map(); // text hash to the owned delivered messages with that text
   const senderOf = new Map(); // delivered message to the record that sent it
   const receiverOf = new Map(); // msg_id to the record that received it
+  const names = new Map(); // record to its title and the names that other sessions give it
+  // A transcript that continues a session under a new id, or forks it, copies its lines without owning them: the
+  // msg_id belongs to the transcript that owns the line.
+  const keep = (map, key, value, owned) => {
+    const had = map.get(key);
+    if (key !== null && key !== undefined && (!had || (owned && !had.owned))) map.set(key, { value, owned });
+  };
+  const at = (map, key) => (key === null || key === undefined ? undefined : map.get(key)?.value);
   for (const r of records) {
+    names.set(r, [r.title]);
     for (const m of r.messages) {
       if (m.dir === 'sent') m.clarified = m.corrected = m.resent = false;
       if (m.dir === 'sent' && !m.failed) {
         senderOf.set(m, r);
-        // The transcript that started first holds the original; a later one only copies it.
-        for (const key of [m.msgId, m.hash]) if (key !== null && key !== undefined && !sends.has(key)) sends.set(key, m);
-      } else if (m.dir === 'received' && m.msgId !== null && !receiverOf.has(m.msgId)) receiverOf.set(m.msgId, r);
+        keep(byId, m.msgId, m, m.owned);
+        if (m.owned) byText.set(m.hash, [...(byText.get(m.hash) ?? []), m]);
+      } else if (m.dir === 'received') keep(receiverOf, m.msgId, r, m.owned);
     }
   }
-  // The sent message that a received one is, and whether a received message comes from the session a sent one goes to.
-  const original = (m) => sends.get(m.msgId ?? m.hash);
+  // What a receiver calls the sender of a message, and what a sender calls its recipient.
+  for (const r of records) {
+    for (const m of r.messages) {
+      if (m.dir === 'received' && at(byId, m.msgId)) names.get(senderOf.get(at(byId, m.msgId))).push(...m.peer);
+      if (m.dir === 'sent' && at(receiverOf, m.msgId)) names.get(at(receiverOf, m.msgId)).push(...m.peer);
+    }
+  }
+  // The owned, delivered send that a message is or copies: by msg_id, else the only send with its text, else the only
+  // one of those whose sender (for a received message) or recipient (for a sent copy) has the name the message gives.
+  const original = (m) => {
+    if (at(byId, m.msgId)) return at(byId, m.msgId);
+    const all = byText.get(m.hash) ?? [];
+    if (all.length === 1) return all[0];
+    const fits = all.filter((c) => samePeer(m.dir === 'sent' ? c.peer : names.get(senderOf.get(c)), m.peer));
+    return fits.length === 1 ? fits[0] : undefined;
+  };
+  // Whether a received message comes from the session a sent one goes to.
   const from = (m, n) => {
     const s = senderOf.get(original(m));
-    return (!!s && s === receiverOf.get(n.msgId)) || samePeer(m.peer, n.peer);
+    return (!!s && s === at(receiverOf, n.msgId)) || samePeer(m.peer, n.peer);
   };
   const sameTo = (a, b) => {
-    const t = receiverOf.get(a.msgId);
-    return (!!t && t === receiverOf.get(b.msgId)) || samePeer(a.peer, b.peer);
+    const t = at(receiverOf, a.msgId);
+    return (!!t && t === at(receiverOf, b.msgId)) || samePeer(a.peer, b.peer);
   };
   const delivered = (m) => m.dir === 'sent' && !m.failed;
   for (const r of records) {
@@ -726,9 +755,10 @@ function signals(records, window) {
           if (asked && isClarification(n.text, m.text)) { asked.clarified = true; break; }
         }
       }
-      // Corrected: this session's next delivered message to the same recipient corrects n.
+      // Corrected: this session's next delivered message to the same recipient corrects n. In a transcript that
+      // continues or forks the session, n is a copy, and the owned original is the one counted.
       const next = ms.slice(j + 1).find((m) => delivered(m) && sameTo(n, m));
-      if (next && isCorrection(next.text)) n.corrected = true;
+      if (next && isCorrection(next.text)) (n.owned ? n : original(n) ?? n).corrected = true;
       // Resent: n repeats an earlier message to the same recipient, with no message from it in between.
       for (let i = j - 1; i >= 0; i--) {
         const m = ms[i];

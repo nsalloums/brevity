@@ -22,6 +22,11 @@
 // the default window. It sends "ops" (no arm) Q9, then Q10 almost word for word with no reply between, and after
 // ops answers, Q12, the same text again. Then a send that fails and its re-send. Dev sends lead Q15, which Q16
 // withdraws. Ops logs no msg_id on what it receives, and lead writes to it as "ops [a1b2c3]".
+//
+// tools/fixtures/meter/linking holds how messages are matched. "orig" sends O1 to "peer" and stops; "cont" continues
+// it under a new id (its lines copied) and sends a correction of O1. "x" and "y" send "peer" the same text and log no
+// msg_id; peer logs a msg_id for each, and for a third copy from "w", which is not measured. Peer asks y, then w,
+// "Which one did you mean".
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
@@ -469,6 +474,7 @@ test('a clarification is a question with a clarification word, or one that names
   assert.ok(!isClarification('Rebased feat/cart. The release is a clarification of 0.4.', got), 'a clarification word outside a question');
   assert.ok(!isClarification('May I also rebase feat/cart-v2 on 9c1e2a7f0?', got), 'leave for its own step');
   assert.ok(!isClarification('ASK I rebase feat/cart now', got), 'leave, as an ASK line');
+  assert.ok(isClarification('I rebased feat/cart; is 9c1e2a7f0 the base you meant?', got), 'a prose question that starts with I');
   assert.ok(!isClarification('Rebased feat/cart; it keeps `a ?? b` as is.', got), 'code is not a question');
   assert.ok(!isClarification('Is #5 merged?', 'Merge #52 first.'), '#5 is not #52');
 });
@@ -544,6 +550,26 @@ test('the signals are counted per arm and for the team, per 100 SendMessage deli
   assert.match(text, /^lite +7 +0 +0\.0 +1 +14\.3 +0 +0\.0$/m);
   assert.match(text, /^team +18 +2 +11\.1 +2 +11\.1 +1 +5\.6$/m);
   assert.match(text, /within its next 5 calls, asks about it/);
+});
+
+const linkingDir = join(here, 'fixtures', 'meter', 'linking');
+const linking = () => run(['--project', linkingDir], { count, cwd: dir });
+
+test('a correction sent after a session continues under a new id counts on the original message', async () => {
+  const r = await linking();
+  // O1 is owned by orig; cont's copy of it is not, and cont's correction flags the original.
+  assert.deepEqual(signalsOf(session(r, 'orig')), ['corrected']);
+  assert.deepEqual(messages(session(r, 'cont'), 'sent').map((m) => [m.owned, m.counted, m.corrected]), [[false, false, false], [true, true, false]]);
+  assert.deepEqual([session(r, 'orig').tally.corrected, session(r, 'cont').tally.delivered], [1, 1]);
+});
+
+test('a received message is matched by text when its msg_id is not a send\'s, and by sender name when two sent that text', async () => {
+  const r = await linking();
+  // Peer's "Which one" goes to y: the clarification lands on y's message, not on x's with the same text.
+  assert.deepEqual(signalsOf(session(r, 'y')), ['clarified']);
+  assert.deepEqual(signalsOf(session(r, 'x')), ['-']);
+  // The copy from w names a session that sent nothing measured: ambiguous, so it flags nothing.
+  assert.equal(r.team.total.clarified, 1);
 });
 
 test('the signals leave no message text or session names in the output', async () => {
