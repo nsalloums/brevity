@@ -53,8 +53,9 @@ spec), with blind decoding and two independent audits:
 - **Not 50%.** Pushing harder dropped decision-relevant facts; about 28% of the text is identifiers, quotes and
   code that must stay as written.
 - **Worth it in busy sessions only.** The spec costs about 2.7k tokens per session. At a single pass's 37 tokens
-  saved per message, a session needs roughly 123-164 messages to come out ahead (76-101 at the audited 60): a
-  coordinator, not a peer that sends two.
+  saved per message, a 200-call session on Claude Opus 5.5 with 1-hour cache writes needs roughly 104-149 messages
+  to come out ahead (64-92 at the audited 60): a coordinator, not a peer that sends two. At 0.1x cache reads and
+  5-minute writes it needs 123-164 (76-101 at 60).
 
 The full method, the numbers per tokenizer and the break-even analysis are in [eval/RESULTS.md](eval/RESULTS.md).
 What counts as "decision-relevant" is defined in [eval/RUBRIC.md](eval/RUBRIC.md), written before the measurement

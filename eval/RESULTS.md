@@ -69,8 +69,8 @@ numeric target, gated by the identifier check, then the same blind decode, two-l
 - **Limits.** One pass and one decoder per approach, the same private corpus, and the legacy tokenizer. The setup
   favours brevity: its spec and dictionary were tuned over nine passes on this corpus, the rubric is brevity's
   own, and the terse instruction was written once.
-- **Break-even.** At about 37 tokens per message, a 200-call session needs roughly 123-164 messages: see
-  [Break-even](#break-even).
+- **Break-even.** At about 37 tokens per message, a 200-call session needs roughly 104-149 messages on Claude Opus
+  5.5 with 1-hour cache writes, and 123-164 at 0.1x cache reads and 5-minute writes: see [Break-even](#break-even).
 
 ## Data
 
