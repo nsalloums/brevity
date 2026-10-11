@@ -11,6 +11,12 @@ Changes waiting on `next` for the next release (see [RELEASING.md](RELEASING.md)
   from their local transcripts. It reports the bill, each injected copy of the spec priced call by call, and the
   brevity messages sent and received, with the saving as an estimate. That covers the costs #40 says the cost model
   leaves out: 1-hour cache writes, per-model read prices, re-injection, duplicated copies and idle cache misses.
+- **#49 and #39, normal.** An opted-in project chooses what the hook loads with `.brevity/arm` or `BREVITY_ARM`:
+  `brevity` (the spec and dictionaries, the default), `lite` (348 tokens), `terse` (176) or `off`. Each injection
+  starts with its arm's marker, and `tools/meter.mjs` reports sessions, cost and estimated saving per arm. On a
+  resume the hook injects the current copy, and Claude Code itself keeps only the items whose text changed
+  (observed on real resumes, not documented by Claude Code): a second copy appears only when the copy's content
+  changed, which is wanted.
 
 ## [0.5.1] - 2026-10-04
 
