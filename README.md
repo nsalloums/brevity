@@ -79,31 +79,34 @@ and revised once, after calibration.
 brevity saves tokens only when the sessions that load it exchange many messages each. The spec plus a small
 dictionary is about 3,200 tokens, and every session that loads them pays for them again on each model call it
 makes, as cache reads. A message written in one pass saves about 37 tokens (about 60 after the evaluation's
-audits), once in the sender's context and once in the recipient's. So a long session needs roughly 123 to 164
-messages before the spec pays for itself, or 76 to 101 at the audited saving (see
-[the break-even section](eval/RESULTS.md#break-even)), and a session that sends two never gets there.
+audits), once in the sender's context and once in the recipient's. So a 200-call session on Claude Opus 5.5
+needs roughly 104 to 149 messages before the spec pays for itself, or 64 to 92 at the audited saving (see
+[the break-even section](eval/RESULTS.md#break-even)), and a session that sends two never gets there. These counts
+leave out re-injections after compactions and resumes, idle cache misses and the plugin's skill entry, which all
+add cost.
 
 **Opting a project in is not enough.** A `.brevity/` folder loads the spec into every session of the project,
 busy or not, and in a hub-and-spoke team with short-lived peers that loses tokens overall. Take a synthetic team
 shaped like the evaluated one: a hub with 2,000 model calls and 268 messages, and 80 peers with 150 calls and 1 to
-14 messages each (median 2). Its net, in input-token equivalents:
+14 messages each (median 2). Its net, in input-token equivalents at Claude Opus 5.5's prices:
 
 | how the spec loads | net for the team |
 |---|---|
-| every session, from its start (a `.brevity/` folder) | -2,974,900 |
-| each session at its first message (the skill, on demand) | -1,926,684 |
-| the hub from its start, the peers at their first message | -1,901,291 |
-| the hub from its start; the peers a 300-token card that only reads (modeled, not in brevity) | +7,618 |
+| every session, from its start (a `.brevity/` folder) | -1,781,540 |
+| each session at its first message (the skill, on demand) | -1,272,802 |
+| the hub from its start, the peers at their first message | -1,259,916 |
+| the hub from its start; the peers a 300-token card that only reads (modeled, not in brevity) | -12,041 |
 
-The hub gains about 1.02 million, but each peer loses 43,000 to 51,000, because it carries the spec on every call
+The hub gains about 0.54 million, but each peer loses 24,000 to 30,000, because it carries the spec on every call
 to save on a handful of messages. For this team, not using brevity beats every way brevity can load today. The
-cost model finds that a read-only reader card of about 220 to 310 tokens would keep the team ahead: up to 309
-tokens under its default assumptions, and up to 218 if each peer's first message arrives at its first call. The
-300-token card in the table is near that limit: if each peer's first message arrives at its first call, or with
-1-hour cache writes, it loses tokens too. That is a modeled result under the assumptions the tool prints, not a shipped feature; brevity has no
-reader card, and [issue #11](https://github.com/nsalloums/brevity/issues/11) tracks the design. All of these
-figures use the audited 60 tokens per message. At a single pass's 37, every policy in the table loses tokens, and
-no reader card keeps this team ahead, even one of 0 tokens.
+cost model finds that a read-only reader card of about 210 to 280 tokens would keep the team ahead: up to 276
+tokens under its default assumptions, and up to 209 if each peer's first message arrives at its first call. The
+300-token card in the table is past that limit; it would come out ahead only with 5-minute cache writes. The
+plugin's skill entry and one re-injection per session lower the limit to 163 tokens. That is a modeled result
+under the assumptions the tool prints, not a shipped feature; brevity has no reader card, and
+[issue #11](https://github.com/nsalloums/brevity/issues/11) tracks the design. All of these figures use the audited
+60 tokens per message. At a single pass's 37, every policy in the table loses tokens, and no reader card keeps this
+team ahead, even one of 0 tokens.
 
 Opt a project in only when every session in it will be busy, such as a coordinator and a few long-lived sessions
 that trade hundreds of messages, and check your own team with [tools/cost-model.mjs](tools/cost-model.mjs) first.
@@ -131,9 +134,12 @@ node tools/cost-model.mjs docs/teams/hub.json --saving 60 --load-tokens 3200 --r
 ```
 
 The third line reproduces the table above from [docs/teams/hub.json](docs/teams/hub.json). The tool prints the
-tokens each session and the whole team save or lose, in input-token equivalents (output 5x, cache write 1.25x and
-cache read 0.1x an input token, as in Anthropic's API pricing; `--output`, `--write` and `--read` change them),
-under four policies: every session loads the spec, only hubs load it, each session loads it at its first message,
+tokens each session and the whole team save or lose, in input-token equivalents at Anthropic's prices. Output is
+5x an input token, and a cache write 2x, the 1-hour rate that Claude Code paid for every write measured in issue #11
+(`--write 1.25` for 5-minute caching). A cache read depends on `--model`: 0.05x on `claude-opus-5-5`, the default
+and the model of those measured calls, 0.025x on `claude-fable-5-1` and `claude-mythos-5-1`, and 0.1x on other
+models. `--output`, `--write` and `--read` override each price, and the output says which prices ran. It compares
+four policies: every session loads the spec, only hubs load it, each session loads it at its first message,
 and hubs always with the others at their first message. `--reader-tokens N` adds a fifth: hubs load the spec, and
 the other sessions load a reader card of N tokens that only decodes, and the output gives the largest card that
 would keep the team ahead. It also prints each session's break-even message count. The spec and your `.brevity/`
@@ -142,6 +148,13 @@ arrive, who writes to whom and a warm cache, are printed with the results. `--ro
 spec's verb table costs and, with your encodings, how often your traffic uses it; rarely used rows are flagged, not
 removed. The saving per message comes from `--saving`, or from your own messages and encodings (see
 [Measure it on your own traffic](#measure-it-on-your-own-traffic)).
+
+By default the model leaves out three costs, and options add them. Re-injection: the hook loads the spec again
+after each compaction and resume, as `--reinject N` extra copies per session or one every `--reinject-every N`
+calls. Idle cache misses: `--idle-misses R`, the share of calls that follow one. The plugin's entry in every
+session's skill listing: `--skill-entry 143`. Their defaults add nothing. For a team that already runs,
+[tools/meter.mjs](tools/meter.mjs) measures these costs from its transcripts, so use it rather than guessing the
+rates.
 
 ### Measure your own team
 

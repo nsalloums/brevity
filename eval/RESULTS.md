@@ -174,20 +174,31 @@ or `HOLD you UNTIL c` form decoded with the right actor. Encodings did not chang
 
 The spec is 2,674 tokens (Anthropic legacy tokenizer), and a small dictionary adds about 500. They sit in the
 context of every session that loads them. A message saves about 60 tokens twice: in the sender's context and in
-the recipient's. On current Claude pricing, output costs 5x input and a cached context read costs 0.1x input, so
-for a session making about 200 model calls:
+the recipient's. In Claude Code on Claude Opus 5.5, output costs 5x input, a cache write 2x (Claude Code wrote
+1-hour entries in every measured call, [issue #40](https://github.com/nsalloums/brevity/issues/40)) and a cached
+context read 0.05x, so for a session making about 200 model calls:
 
-- the spec costs about 3,200 x (1.25 + 0.1 x 200) ≈ 68k input-token equivalents;
-- a message the session sends saves about 60 x 5 (output) + 60 x 0.1 x 100 (carried for half the session) ≈ 900;
-  one it receives saves about 675.
+- the spec costs about 3,200 x (2 + 0.05 x 200) ≈ 38k input-token equivalents;
+- a message the session sends saves about 60 x 5 (output) + 60 x 0.05 x 100 (carried for half the session) ≈ 600;
+  one it receives saves about 60 x 2 (cache write) + 300 ≈ 420.
 
-So a session needs roughly **76-101 messages** before the spec pays for itself
-(`node tools/cost-model.mjs --saving 60 --load-tokens 3200 --turns 200`). At 0.2.0, with a 2,641-token spec and
-about 65 tokens saved per message, the same tool gives 68-91; this page said 70-95, a rounded hand estimate.
+So a session needs roughly **64-92 messages** before the spec pays for itself
+(`node tools/cost-model.mjs --saving 60 --load-tokens 3200 --turns 200`). Until #40 this page and the tool used
+5-minute writes (1.25x) and 0.1x reads, the read price of models other than Claude Opus 5.5, Fable 5.1 and Mythos
+5.1: at those prices the same session needs 76-101 (add `--model claude-sonnet-5-5 --write 1.25`). At 0.2.0, with a 2,641-token spec and about 65 tokens
+saved per message, the tool gave 68-91 at those older prices; this page said 70-95, a rounded hand estimate.
 
 These figures use the audited saving. A single writing pass saves about 37 tokens per message
 ([Single writing pass](#single-writing-pass-pilot-2026-10-04)), and at that saving the same session needs roughly
-**123-164 messages** (`node tools/cost-model.mjs --saving 37 --load-tokens 3200 --turns 200`).
+**104-149 messages** (`node tools/cost-model.mjs --saving 37 --load-tokens 3200 --turns 200`), or 123-164 at the
+older prices.
+
+All of these leave out costs that the cost model adds only on request: the hook's re-injection after each
+compaction and resume (`--reinject`), idle cache misses (`--idle-misses`) and the plugin's 143-token skill entry
+(`--skill-entry 143`). With the skill entry, one re-injection and idle misses on 1% of calls, rates picked to
+illustrate, the 200-call session needs 84-112 messages at 60 tokens saved
+(`... --skill-entry 143 --reinject 1 --idle-misses 0.01`). [tools/meter.mjs](../tools/meter.mjs) measures these
+costs on a real team's transcripts.
 
 In the measured project, the coordinating session exchanged 268 messages and paid off. The median peer session
 exchanged 2 and would have lost tokens. That is why the Claude Code plugin loads the spec only in projects that opt

@@ -7,7 +7,10 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import test, { after } from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { breakEven, firstCall, model, pairs, PRICES, run, tokenizer, uses, verbRows } from './cost-model.mjs';
+import {
+  breakEven, copies, DEFAULT_READ, firstCall, held, model, pairs, PRICES, READ_PRICES, readPrice, render, run, tokenizer, uses, verbRows,
+} from './cost-model.mjs';
+import { DEFAULT_READ as METER_DEFAULT_READ, READ_PRICES as METER_READ_PRICES } from './meter.mjs';
 
 const tool = join(dirname(fileURLToPath(import.meta.url)), 'cost-model.mjs');
 const dir = mkdtempSync(join(tmpdir(), 'brevity-cost-model-'));
@@ -16,15 +19,30 @@ const file = (name, data) => { const f = join(dir, name); writeFileSync(f, typeo
 const close = (a, b, eps = 1e-6) => assert.ok(Math.abs(a - b) <= eps * Math.max(1, Math.abs(b)), `${a} != ${b}`);
 const cli = (...args) => spawnSync(process.execPath, [tool, ...args], { encoding: 'utf8', cwd: dir });
 
-test('reproduces the break-even in eval/RESULTS.md: ~3,200 tokens and 200 calls need 76 to 101 messages', () => {
-  const at = (sentShare) => breakEven({ load: 3200, saving: 60, turns: 200, sentShare });
-  // The spec costs 3,200 x (1.25 + 0.1 x 200) = 68,000; a sent message saves 60 x (5 + 0.1 x 100) = 900,
-  // a received one 60 x (1.25 + 0.1 x 100) = 675.
-  assert.equal(at(1), Math.ceil(68000 / 900));
-  assert.equal(at(0), Math.ceil(68000 / 675));
-  assert.equal(at(1), 76, `all sent: ${at(1)}`);
-  assert.equal(at(0), 101, `all received: ${at(0)}`);
+test('reproduces the break-even in eval/RESULTS.md: ~3,200 tokens and 200 calls need 64 to 92 messages', () => {
+  const at = (sentShare, prices) => breakEven({ load: 3200, saving: 60, turns: 200, sentShare, prices });
+  // On claude-opus-5-5 with 1-hour writes, the spec costs 3,200 x (2 + 0.05 x 200) = 38,400; a sent message saves
+  // 60 x (5 + 0.05 x 100) = 600, a received one 60 x (2 + 0.05 x 100) = 420.
+  assert.deepEqual(PRICES, { output: 5, write: 2, read: 0.05 });
+  assert.equal(at(1), Math.ceil(38400 / 600));
+  assert.equal(at(0), Math.ceil(38400 / 420));
+  assert.equal(at(1), 64, `all sent: ${at(1)}`);
+  assert.equal(at(0), 92, `all received: ${at(0)}`);
   assert.ok(at(0.5) > at(1) && at(0.5) < at(0));
+  // The prices before #40, 5-minute writes and 0.1 reads, give the 76 to 101 that eval/RESULTS.md labels as such.
+  const old = { output: 5, write: 1.25, read: 0.1 };
+  assert.deepEqual([at(1, old), at(0, old)], [76, 101]);
+});
+
+test('cache reads are priced per model, as tools/meter.mjs prices them', () => {
+  assert.deepEqual(READ_PRICES, METER_READ_PRICES);
+  assert.equal(DEFAULT_READ, METER_DEFAULT_READ);
+  assert.equal(readPrice('claude-opus-5-5'), 0.05);
+  assert.equal(readPrice('claude-fable-5-1'), 0.025);
+  assert.equal(readPrice('claude-mythos-5-1'), 0.025);
+  assert.equal(readPrice('claude-opus-5-5-20261001'), 0.05, 'by id prefix');
+  assert.equal(readPrice('claude-sonnet-5-5'), 0.1);
+  assert.equal(readPrice(undefined), 0.1);
 });
 
 test('always-on equals the formula summed message by message', () => {
@@ -50,16 +68,59 @@ test('always-on equals the formula summed message by message', () => {
 });
 
 test('prices can be overridden', () => {
-  const cheap = breakEven({ load: 3100, saving: 65, turns: 200, sentShare: 1, prices: { output: 5, write: 1.25, read: 0.05 } });
+  const cheap = breakEven({ load: 3100, saving: 65, turns: 200, sentShare: 1, prices: { output: 5, write: 2, read: 0.025 } });
   assert.ok(cheap < breakEven({ load: 3100, saving: 65, turns: 200, sentShare: 1 }));
 });
 
-test('the first message arrives at T/(n+1), at call 0 with --first start, or where the file says', () => {
-  const s = { turns: 90, sent: 1, received: 1 };
-  assert.equal(firstCall(s), 30);
-  assert.equal(firstCall(s, 'start'), 0);
-  assert.equal(firstCall({ ...s, first: 45 }, 'start'), 45);
-  assert.equal(firstCall({ turns: 90, sent: 0, received: 0 }), null);
+test('--model sets the read price, and --read, --write and --output override the defaults', async () => {
+  const base = ['--saving', '60', '--load-tokens', '3200', '--turns', '200'];
+  const r = await run(base);
+  assert.equal(r.model, 'claude-opus-5-5');
+  assert.deepEqual(r.prices, { output: 5, write: 2, read: 0.05 });
+  assert.deepEqual([r.breakEven.allSent, r.breakEven.allReceived], [64, 92]);
+  assert.equal((await run([...base, '--model', 'claude-fable-5-1'])).prices.read, 0.025);
+  const other = await run([...base, '--model', 'claude-sonnet-5-5', '--write', '1.25']);
+  assert.deepEqual(other.prices, { output: 5, write: 1.25, read: 0.1 });
+  assert.deepEqual([other.breakEven.allSent, other.breakEven.allReceived], [76, 101]);
+  const read = await run([...base, '--model', 'claude-fable-5-1', '--read', '0.2', '--output', '4']);
+  assert.deepEqual(read.prices, { output: 4, write: 2, read: 0.2 });
+  // The output says which prices ran, and where each came from.
+  const text = render(r);
+  assert.match(text, /cache write 2x, cache read 0\.05x an input token/);
+  assert.match(text, /cache read for claude-opus-5-5 \(the default; --model names another\), cache write at the 1-hour rate \(--write 1\.25 for 5-minute caching\)/);
+  assert.match(render(other), /cache read for claude-sonnet-5-5 \(--model\), cache write from --write/);
+  assert.match(render(read), /cache read from --read, cache write at the 1-hour rate .*, output from --output/);
+});
+
+test('--reinject and --reinject-every add cache writes of what a session carries', () => {
+  // Per session, spread evenly: a session that loads at call 25 of 100 pays 3/4 of 2 copies.
+  assert.equal(copies(100, 0, { reinject: 2 }), 2);
+  assert.equal(copies(100, 25, { reinject: 2 }), 1.5);
+  // Every 40 calls: at calls 40 and 80, before the last call; a load at call 50 pays only the one at 80.
+  assert.equal(copies(100, 0, { reinjectEvery: 40 }), 2);
+  assert.equal(copies(100, 0, { reinjectEvery: 50 }), 1, 'none at the last call');
+  assert.equal(copies(100, 50, { reinjectEvery: 40 }), 1);
+  assert.equal(copies(30, 0, { reinjectEvery: 200 }), 0);
+  assert.equal(copies(100, 0, { reinject: 1, reinjectEvery: 40 }), 3);
+  assert.equal(copies(0, 0, { reinject: 1 }), 0);
+  const p = PRICES;
+  close(held(1000, 100, 0, p, { reinject: 2 }), 1000 * (p.write * 3 + p.read * 100));
+  // The reads do not change: the compaction or resume drops the old copy.
+  close(held(1000, 100, 0, p, { reinject: 2 }) - held(1000, 100, 0, p), 2 * 1000 * p.write);
+});
+
+test('--idle-misses prices a share of the calls at the write price, for loaded context and messages alike', () => {
+  const p = PRICES;
+  const r = (x) => p.read + x * (p.write - p.read);
+  close(held(1000, 100, 0, p, { idleMisses: 0.1 }), 1000 * (p.write + r(0.1) * 100));
+  close(held(1000, 100, 0, p, { idleMisses: 1 }), 1000 * p.write * 101); // every call writes
+  const at = (idleMisses) => breakEven({ load: 3200, saving: 60, turns: 200, sentShare: 1, extras: { idleMisses } });
+  assert.equal(at(0.05), Math.ceil((3200 * (p.write + r(0.05) * 200)) / (60 * (p.output + r(0.05) * 100))));
+  // Carried messages save at the same raised rate.
+  const A = { name: 'A', turns: 100, sent: 1, received: 0 };
+  const B = { name: 'B', turns: 100, sent: 0, received: 1 };
+  const net = (idleMisses) => model([A, B], { load: 0, saving: 10, stub: 0, extras: { idleMisses } }).policies[0].net;
+  close(net(0.5) - net(0), 10 * (r(0.5) - p.read) * (50 + 50));
 });
 
 // A hub and its peers: the hub writes 12 messages and gets 7 back; three peers share them, one is idle.
@@ -112,12 +173,13 @@ test('hub-only saves on the messages two hubs exchange', () => {
 test('first-message spares idle and quiet sessions most of the cost', () => {
   const r = model(star, { load: 3100, saving: 65, threshold: 15 });
   const [hub, a, , , idle] = r.sessions;
-  // Idle: only the stub, 138 x (1.25 + 0.1 x 40).
-  close(idle.net['first-message'], -138 * (1.25 + 0.1 * 40));
-  close(idle.net['always-on'], -3100 * (1.25 + 0.1 * 40));
+  const p = PRICES;
+  // Idle: only the stub, 138 x (write + read x 40).
+  close(idle.net['first-message'], -138 * (p.write + p.read * 40));
+  close(idle.net['always-on'], -3100 * (p.write + p.read * 40));
   // A peer saves the same on its messages, and loads 80/10 = 8 calls later.
   assert.equal(a.firstMessageAt, 8);
-  close(a.net['first-message'] - a.net['always-on'], 3100 * 0.1 * 8 - 138 * (1.25 + 0.1 * 80));
+  close(a.net['first-message'] - a.net['always-on'], 3100 * p.read * 8 - 138 * (p.write + p.read * 80));
   // hub+first: the hub loads at call 0 and carries no stub; the peers load on demand.
   assert.equal(hub.net['hub+first'], hub.net['always-on']);
   assert.equal(a.net['hub+first'], a.net['first-message']);
@@ -140,9 +202,10 @@ test('hub+reader: readers write in prose, so only the hub\'s messages save', () 
   // A peer saves only on what the hub sends it, and loads the card at its first received message: 80/(5+1).
   assert.ok(Math.abs(a.detail['hub+reader'].savedMessages - 5) < 0.05);
   close(a.detail['hub+reader'].loadsAt, 80 / 6);
-  close(a.detail['hub+reader'].cost, 500 * (1.25 + 0.1 * (80 - 80 / 6)) + 138 * (1.25 + 0.1 * 80));
+  const p = PRICES;
+  close(a.detail['hub+reader'].cost, 500 * (p.write + p.read * (80 - 80 / 6)) + 138 * (p.write + p.read * 80));
   assert.equal(idle.detail['hub+reader'].loadsAt, null);
-  close(idle.net['hub+reader'], -138 * (1.25 + 0.1 * 40));
+  close(idle.net['hub+reader'], -138 * (p.write + p.read * 40));
   // Policies without the card are unchanged.
   assert.deepEqual(r.policies.slice(0, 4), model(star, { load: 3100, saving: 65, threshold: 15 }).policies);
 });
@@ -162,6 +225,11 @@ test('readerMax is the card size at which hub+reader nets 0', () => {
   const edge = model(team, { ...opts, reader: r.readerMax });
   assert.ok(Math.abs(edge.policies.at(-1).net) < 1e-6 * r.readerNetAtZero);
   assert.ok(model(team, { ...opts, reader: r.readerMax + 1 }).policies.at(-1).net < 0);
+  // With the extra costs set, the card still costs a fixed amount per token, and hub+reader nets 0 at readerMax.
+  const extras = { reinject: 1, reinjectEvery: 30, idleMisses: 0.05, skillEntry: 143 };
+  const rx = model(team, { ...opts, reader: 100, extras });
+  assert.ok(rx.readerMax > 0 && rx.readerMax !== r.readerMax);
+  assert.ok(Math.abs(model(team, { ...opts, reader: rx.readerMax, extras }).policies.at(-1).net) < 1e-6 * rx.readerNetAtZero);
   // With 12 messages from the hub, no card pays for the hub's own load.
   const none = model(star, { load: 3100, saving: 65, threshold: 15, reader: 100 });
   assert.equal(none.readerMax, 0);
@@ -169,6 +237,38 @@ test('readerMax is the card size at which hub+reader nets 0', () => {
   // When every session is a hub, no one loads the card.
   const hubs = [{ name: 'h1', turns: 500, sent: 40, received: 40 }, { name: 'h2', turns: 500, sent: 40, received: 40 }];
   assert.equal(model(hubs, { load: 3100, saving: 65, threshold: 10, reader: 300 }).readerMax, null);
+});
+
+test('--skill-entry: every session carries the entry under every policy, and the stub stands in for it', () => {
+  const opts = { load: 3100, saving: 65, threshold: 15 };
+  const plain = model(star, opts);
+  const entry = model(star, { ...opts, extras: { skillEntry: 143 } });
+  const p = PRICES;
+  star.forEach((s, i) => {
+    const extra = 143 * (p.write + p.read * s.turns);
+    close(plain.sessions[i].net['always-on'] - entry.sessions[i].net['always-on'], extra);
+    // A non-hub that loads nothing under hub-only still carries the plugin's entry.
+    close(plain.sessions[i].net['hub-only'] - entry.sessions[i].net['hub-only'], extra);
+    // Sessions that carry the stub carry no second entry.
+    assert.equal(entry.sessions[i].net['first-message'], plain.sessions[i].net['first-message']);
+  });
+  assert.equal(entry.sessions[1].net['hub+first'], plain.sessions[1].net['hub+first']);
+  // The break-even counts the entry as part of the load.
+  assert.equal(breakEven({ load: 3200, saving: 60, turns: 200, sentShare: 1, extras: { skillEntry: 143 } }),
+    breakEven({ load: 3343, saving: 60, turns: 200, sentShare: 1 }));
+});
+
+test('the extra costs default to 0 and change no result until set', () => {
+  const opts = { load: 3100, saving: 65, threshold: 15, reader: 300 };
+  assert.deepEqual(model(star, { ...opts, extras: { reinject: 0, reinjectEvery: null, idleMisses: 0, skillEntry: 0 } }), model(star, opts));
+});
+
+test('the first message arrives at T/(n+1), at call 0 with --first start, or where the file says', () => {
+  const s = { turns: 90, sent: 1, received: 1 };
+  assert.equal(firstCall(s), 30);
+  assert.equal(firstCall(s, 'start'), 0);
+  assert.equal(firstCall({ ...s, first: 45 }, 'start'), 45);
+  assert.equal(firstCall({ turns: 90, sent: 0, received: 0 }), null);
 });
 
 // A synthetic spec with a verb table, and encodings that use some of its verbs.
@@ -214,7 +314,7 @@ test('--rows reports tokens, cost and use per row, and flags rare rows', async (
   assert.equal(r.rows.length, 4);
   const [doNo, askA1, willDone, tell] = r.rows;
   assert.equal(doNo.tokens, tok.count('| `DO x` / `NO x` | a request / a prohibition |\n'));
-  close(doNo.perSession, doNo.tokens * (1.25 + 0.1 * 100));
+  close(doNo.perSession, doNo.tokens * (PRICES.write + PRICES.read * 100));
   assert.equal(doNo.used, 25);
   assert.deepEqual(askA1.byVerb, { ASK: 25, A1: 25 });
   assert.equal(askA1.used, 50);
@@ -262,7 +362,29 @@ test('the CLI prints the policies, the net per session and the assumptions', () 
   for (const s of ['hub+reader', 'reader card: 300 tokens', 'readers write in prose']) assert.ok(reader.stdout.includes(s), `missing ${s}`);
 });
 
+test('the CLI names the extra costs it adds and leaves out, and points to tools/meter.mjs', () => {
+  const sessions = file('sessions.json', star);
+  const plain = cli(sessions, '--saving', '65', '--load-tokens', '3100');
+  assert.equal(plain.status, 0, plain.stderr);
+  assert.match(plain.stdout, /extra costs: no re-injected copies \(--reinject N per session, --reinject-every N calls\), no idle cache misses \(--idle-misses R\), no skill entry \(--skill-entry 143 for the Claude Code plugin\)/);
+  assert.match(plain.stdout, /tools\/meter\.mjs measures these costs from a team's own transcripts, call by call: for a real team, use it\./);
+  assert.match(plain.stdout, /the cache stays warm and a session holds one copy/);
+  const set = cli(sessions, '--saving', '65', '--load-tokens', '3100', '--reinject', '1.5', '--reinject-every', '400', '--idle-misses', '0.02', '--skill-entry', '143');
+  assert.equal(set.status, 0, set.stderr);
+  assert.match(set.stdout, /extra costs: 1\.5 extra copies per session \(--reinject\) and one extra copy every 400 calls \(--reinject-every\), idle cache misses on 2% of calls \(--idle-misses\), a 143-token skill entry in every session \(--skill-entry\)/);
+  assert.match(set.stdout, /idle misses raise both to the write price/);
+  assert.match(set.stdout, /net 0 means no plugin/);
+  const json = JSON.parse(cli(sessions, '--saving', '65', '--load-tokens', '3100', '--idle-misses', '0.02', '--json').stdout);
+  assert.deepEqual(json.extras, { reinject: 0, reinjectEvery: null, idleMisses: 0.02, skillEntry: 0 });
+  assert.equal(json.model, 'claude-opus-5-5');
+});
+
 test('the CLI refuses bad input', () => {
+  assert.equal(cli('--saving', '65', '--load-tokens', '1', '--idle-misses', '1.5').status, 2, 'a share is at most 1');
+  assert.equal(cli('--saving', '65', '--load-tokens', '1', '--reinject-every', '0').status, 2);
+  assert.equal(cli('--saving', '65', '--load-tokens', '1', '--reinject', '-1').status, 2);
+  assert.equal(cli('--saving', '65', '--load-tokens', '1', '--model', ' ').status, 2);
+  assert.equal(cli('--saving', '65', '--load-tokens', '1', '--model').status, 2, '--model needs a value');
   assert.equal(cli(file('s.json', star), '--load-tokens', '3100').status, 2, 'no saving');
   assert.equal(cli(file('bad.json', [{ name: 'x', turns: -1, sent: 0, received: 0 }]), '--saving', '65', '--load-tokens', '1').status, 2);
   assert.equal(cli('--saving', 'lots', '--load-tokens', '1').status, 2);
