@@ -9,6 +9,10 @@ Changes waiting on `next` for the next release (see [RELEASING.md](RELEASING.md)
 
 - The README, eval/RESULTS.md and eval/RUBRIC.md link eval/METHOD.md, the reusable method, and RESULTS.md now says,
   as METHOD.md does, that its holdout was not a sealed test (#27).
+- `tools/idcheck.mjs` checks file:line for any extension of 1-8 letters and digits, one-digit #N and the -M of
+  +N/-M diffstats, and no longer counts a SHA's digits in the encoding as a kept number. It adds `--small-numbers`
+  for numbers and diffstats below 10 and `--legacy` for the coverage of 0.7.0, and prints the coverage each run
+  used. An unknown option now stops it with exit code 2 instead of being ignored (#56).
 - `tools/meter.mjs` flags delegation prompts as clarified, corrected or resent, in a table apart from the
   SendMessage signals, and counts a `spawn_task` whose result is an error as a failed send rather than a prompt
   (#58). `BREVITY_METER_TOKENIZER=chars/4` makes its tests pass with or without `@anthropic-ai/tokenizer` (#60).

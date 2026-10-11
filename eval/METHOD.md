@@ -108,17 +108,29 @@ A synthetic message and its gold facts, with the rubric clause each falls under:
   survive from each original into its encoding:
   - commit SHAs of 7-40 hex characters, of which the encoding must keep a prefix of at least 9 (or the whole SHA if
     it is shorter);
-  - #N references of two or more digits, and GitHub pull request and issue URLs;
-  - the line numbers of file:line references, only for `.ts`, `.tsx`, `.js`, `.jsx`, `.mjs`, `.md`, `.sql`,
-    `.json`, `.yaml`, `.yml` and `.css` files;
-  - integers and +N/-N diffstats of 10 or more;
-  - text inside «...».
+  - #N references of any length, and GitHub pull request and issue URLs. A one-digit #N counts unless it is a
+    colour, a heading anchor (`#3-setup`) or a URL fragment, so an ordinal (#1) or a log's step number (BuildKit's
+    `#7 [4/5]`) counts too, and the encoding must keep it as a standalone number (`#2` or `2`, not `2nd`);
+  - the line numbers of file:line references (`name.ext:N` or `name.ext:N-M`) whose extension is 1-8 letters and
+    digits, such as `.py`, `.go` or `.ps1`. A time or an address (`12.30:45`, `10.0.0.1:8080`) never counts. Outside
+    the `.ts`, `.tsx`, `.js`, `.jsx`, `.mjs`, `.md`, `.sql`, `.json`, `.yaml`, `.yml` and `.css` files that 0.7.0
+    checked, a name inside a URL, after `user@`, before `/path` or ending in `.com`, `.net`, `.org`, `.io` or
+    `.internal` is a host and is skipped; a port on any other host (`db.ci.local:5432`) is checked as a line;
+  - integers and +N/-M diffstats of two or more digits (10 or more, or zero-padded such as 09), or of any size with
+    `--small-numbers`. A SHA's digits in the encoding do not keep a number;
+  - text inside «...», up to 120 characters.
 
-  Nothing else is checked: a one-digit #N, a small diffstat, a `.py:42` or text in ordinary quotes can go missing
-  unnoticed ([#56](https://github.com/nsalloums/brevity/issues/56)). If your traffic names other kinds of files or
-  identifiers, widen the patterns before you trust identifier survival. `--dict aliases.json` lets an alias count as
-  the long form it stands for. An encoding that fails goes back to its encoder before anything is decoded. Give every
-  arm the same retry rule: #26 proposes one gated retry.
+  The output's `coverage` line names what the run checked, and the header of `tools/idcheck.mjs` lists every
+  exception. Nothing else is checked: text in ordinary quotes, a number right after a letter, digit, `#`, `.`, `:`,
+  `/` or `-` (the minutes in 14:30, a port after `localhost:`, the 120 in 118/120), a number followed in the same
+  word by a letter a-f (30-day, 512mb), a number with a thousands separator beyond its last group, or a file with
+  no extension (`Makefile:12`) can go missing unnoticed. Numbers below 10 are off by default because list markers
+  and counts written as words would show as lost; turn them on with `--small-numbers` and read what they flag.
+  `--legacy` runs the narrower coverage of brevity 0.7.0, which the published figures used
+  ([#56](https://github.com/nsalloums/brevity/issues/56)). If your traffic names other kinds of identifiers, widen
+  the patterns before you trust identifier survival. `--dict aliases.json` lets an alias count as the long form it
+  stands for. An encoding that fails goes back to its encoder before anything is decoded. Give every arm the same
+  retry rule: #26 proposes one gated retry.
 
   ```
   node tools/idcheck.mjs messages.json encodings.json --verbose
@@ -207,8 +219,8 @@ refuted by quoting "send the sender #214's new head SHA".
 - **Count incidental findings apart.** They are never losses.
 - **Count line-1 failures apart.** When line 1 does not carry the main fact, the body may still hold it, but a human
   who reads only the preview misses it. In the pilot they ranged from 6 to 26 per arm over 268 messages.
-- **Report identifier survival** from the identifier check: in brevity's audited encodings, 2,637 identifiers and 0
-  missing.
+- **Report identifier survival** from the identifier check, with its coverage line: in brevity's audited encodings,
+  2,637 identifiers and 0 missing, under the 0.7.0 coverage that `--legacy` runs.
 
 **Roots.** Give every confirmed loss one root. The root decides the fix:
 
