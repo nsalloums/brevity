@@ -58,7 +58,7 @@ numeric target, gated by the identifier check, then the same blind decode, two-l
 | tokens saved per message | about 37 |
 | confirmed decision-relevant losses | 41, in 40 messages |
 | messages with a loss, per 100 | 14.9 (95% CI 11.2-19.7) |
-| identifiers missing | 0 |
+| identifiers missing (0.7.0 identifier check, `--legacy`) | 0 |
 
 - **These are the figures to expect** from a session that writes each message once.
 - **Terse English did about as well.** The pilot also gave the messages to a 167-token instruction asking for
