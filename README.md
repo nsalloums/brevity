@@ -255,7 +255,7 @@ Copy `skills/brevity/` to `~/.agents/skills/brevity/` (Codex, Gemini CLI, Cursor
 
 ## What the plugin runs, reads and sends
 
-- **The hook.** On session start, resume, `/clear` and compaction, Claude Code runs
+- **The hook.** On session start, resume, fork, `/clear` and compaction, Claude Code runs
   `node "${CLAUDE_PLUGIN_ROOT}/hooks/inject.mjs" <k>` four times (k = 0 to 3), because each hook's output is capped
   at 10,000 characters. Each run reads the hook input that Claude Code passes on stdin, for the session's directory.
   It looks for each `.brevity/` path it uses (the folder, and the files listed below) in the session's directory and
@@ -272,7 +272,7 @@ Copy `skills/brevity/` to `~/.agents/skills/brevity/` (Codex, Gemini CLI, Cursor
     `BREVITY_ARM`.
 
   It prints the arm's marker and files as context for the session, in parts under the cap, on every session start,
-  resume, `/clear` and compaction.
+  resume, fork, `/clear` and compaction.
 - **What it never does.** No network requests, no file writes, no other files or variables read.
 - **The skill.** Claude reads `skills/brevity/SKILL.md` and `SPEC.md` from the plugin and, when they exist, the
   project's `.brevity/` dictionaries.
