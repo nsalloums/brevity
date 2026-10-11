@@ -29,12 +29,16 @@
 // "Which one did you mean".
 //
 // tools/fixtures/meter/delegation holds the delegation signals (issue #58). "coord" (terse, titled "acme
-// coordinator") spawns D1, D2, D3, a spawn that fails and its re-spawn D5, then D6 (D1 almost word for word) and D7
-// (D3's text again). "s1" (lite) starts from D1, reads for 7 calls and asks "Did you mean"; coord answers, and
-// "coord2", which continues coord under a new id, later corrects it. "s2" starts from D2 and reports; coord thanks it,
-// corrects it, and s2 asks about the correction with a question that also names D2's file. "s3" (lite, no title, no
-// msg_id) starts from D3 and asks leave for its own step; coord corrects it, addressed by D3's title. "s7" starts
-// from D7, after it, so it is D7's session and s3 is D3's.
+// coordinator") spawns D1, D2, D3, a spawn that fails (D4), its re-spawn D5 and a second failed spawn of it (D5b),
+// then D6 (D1 almost word for word), D7 (D3's text again), and D8 and D9 (the same text twice). "coord2" continues
+// coord under a new id, with its lines up to D3 copied. "s1" (lite) starts from D1, reads for 7 calls and asks "Did
+// you mean"; coord answers, sends a correction after D6, and coord2 corrects it. "s2" starts from D2 and reports;
+// coord thanks it, corrects it, and s2 asks about the correction with a question that also names D2's file. "s3"
+// (lite, no title, no msg_id) starts from D3, asks a third session "Did you mean", asks coord leave for its own step,
+// and coord2 corrects it by D3's title. "s5" starts from D5; coord2 writes to it before it asks "Did you mean". "s7",
+// titled apart from D7, starts from D7 after it was sent; coord corrects it by that title, delivered with no msg_id
+// under another name, before s7 asks. "s8" and "s9" both start after D8 and D9; "s9b" continues s9 under a new id and
+// receives coord's correction.
 //
 // Every run here counts tokens with chars/4: run() takes `count`, and the command line gets
 // BREVITY_METER_TOKENIZER=chars/4, so the numbers hold whether or not @anthropic-ai/tokenizer is installed (issue #60).
@@ -623,66 +627,76 @@ const delegation = (...args) => run(['--project', delegationDir, ...args], { cou
 const delegationSignalsOf = (s) => messages(s, 'delegation-sent').map((m) => (m.failed ? 'failed'
   : ['clarified', 'corrected', 'resent'].filter((k) => m[k]).join('+') || '-'));
 
-test('a delegation prompt starts the session whose first message it is: the original, the newest sent before it', async () => {
+test('a delegation prompt starts the session whose first message it is: one each, the newest original sent before it', async () => {
   const r = await delegation();
   const coord = session(r, 'coord');
-  // D1 D2 D3, the failed spawn, D5, D6 and D7. D3 and D7 have the same text: s3 started before D7 was sent, s7 after.
-  assert.deepEqual(messages(coord, 'delegation-sent').map((m) => m.started), [true, true, true, false, false, false, true]);
-  assert.deepEqual(['s1', 's2', 's3', 's7'].map((id) => messages(session(r, id), 'delegation-received').length), [1, 1, 1, 1]);
-  // coord2's copy of D1 is not owned: the original in coord is the one started, and only it is counted.
-  assert.deepEqual(messages(session(r, 'coord2'), 'delegation-sent').map((m) => [m.owned, m.counted, m.started]), [[false, false, false]]);
+  // D1 D2 D3 D4 D5 D5b D6 D7 D8 D9. D3 and D7 have the same text: s3 started before D7 was sent, s7 after. s5 takes
+  // D5, not D5b, which failed after it. s8 and s9 both started after D8 and D9: s8, first, takes the newer D9, and s9
+  // takes D8. s9b, which continues s9, keeps s9's prompt.
+  assert.deepEqual(messages(coord, 'delegation-sent').map((m) => m.started),
+    [true, true, true, false, true, false, false, true, true, true]);
+  for (const id of ['s1', 's2', 's3', 's5', 's7', 's8', 's9']) assert.equal(messages(session(r, id), 'delegation-received').length, 1, id);
+  assert.deepEqual(messages(session(r, 's9b'), 'delegation-received').map((m) => [m.owned, m.counted]), [[false, false]]);
+  // coord2's copies of D1, D2 and D3 are not owned: the originals in coord are the ones started and counted.
+  assert.deepEqual(messages(session(r, 'coord2'), 'delegation-sent').map((m) => [m.owned, m.counted, m.started]),
+    [[false, false, false], [false, false, false], [false, false, false]]);
   // A spawn whose result is an error failed: it is neither sent nor a delegation prompt.
-  assert.deepEqual([coord.tally.failed, coord.tally.delegations, coord.tally.delegationsStarted], [1, 6, 4]);
-  assert.equal(coord.tally.sentTerse, 5 + 6, 'five SendMessage deliveries and six delegation prompts');
+  assert.deepEqual([coord.tally.failed, coord.tally.delegations, coord.tally.delegationsStarted], [2, 8, 7]);
+  assert.equal(coord.tally.sentTerse, 8 + 8, 'eight SendMessage deliveries and eight delegation prompts');
 });
 
 test('each delivered delegation prompt is clarified, corrected or resent by the rules; a failed spawn never is', async () => {
   const r = await delegation();
-  // D1: s1 asks "Did you mean" 7 calls in, and coord2 corrects it after coord's plain answer. D2: s2's question names
-  // D2's file, but only after coord wrote to it again. D3: s3 asks leave for its own step, and coord corrects it by
-  // its title. D5 repeats only the failed spawn. D6 repeats D1 almost word for word, and D7 repeats D3.
-  assert.deepEqual(delegationSignalsOf(session(r, 'coord')), ['clarified+corrected', '-', 'corrected', 'failed', '-', 'resent', 'resent']);
+  // D1: s1 asks "Did you mean" 7 calls in; coord answers plainly, and coord2's correction counts on the original.
+  // D2: s2's question names D2's file, but only after coord wrote to it again. D3: s3's "Did you mean" goes to a third
+  // session and its question to coord asks leave; coord2 corrects it by D3's title, and its copy of D3 stands for the
+  // original although D7 has the same text. D5: coord2 writes to s5 before s5 asks, under coord's name. D6 repeats D1
+  // and started nothing, so coord's correction to D1's session after it is not D6's. D7 repeats D3; coord corrects s7
+  // by s7's own title, and that correction reaches s7, matched by its text, before s7 asks. D8: coord's correction
+  // reaches s9b, which continues D8's session. D9 repeats D8.
+  assert.deepEqual(delegationSignalsOf(session(r, 'coord')),
+    ['clarified+corrected', '-', 'corrected', 'failed', '-', 'failed', 'resent', 'corrected+resent', 'corrected', 'resent']);
   // No call window applies to a delegation prompt, whatever --clarify-window says.
-  assert.deepEqual(delegationSignalsOf(session(await delegation('--clarify-window', '1'), 'coord'))[0], 'clarified+corrected');
+  assert.equal(delegationSignalsOf(session(await delegation('--clarify-window', '1'), 'coord'))[0], 'clarified+corrected');
   const t = session(r, 'coord').tally;
-  assert.deepEqual([t.delegations, t.delegationsStarted, t.delegationsClarified, t.delegationsCorrected, t.delegationsResent], [6, 4, 1, 2, 2]);
+  assert.deepEqual([t.delegations, t.delegationsStarted, t.delegationsClarified, t.delegationsCorrected, t.delegationsResent], [8, 7, 1, 4, 3]);
 });
 
 test('the delegation signals are counted apart from the SendMessage ones, per arm and for the team', async () => {
   const r = await delegation();
-  // The SendMessage signals: s2's question clarifies coord's correction, which corrects coord's thanks. Neither
-  // the prompts nor the corrections of a prompt count among them.
-  assert.deepEqual(signalsOf(session(r, 'coord')), ['-', 'corrected', 'clarified', '-', '-']);
+  // The SendMessage signals: coord's correction after D6 corrects its answer to s1, s2's question clarifies coord's
+  // correction, which corrects coord's thanks, and s5's question clarifies what coord2 wrote to it. The prompts are
+  // not among them.
+  assert.deepEqual(signalsOf(session(r, 'coord')), ['corrected', 'corrected', 'clarified', '-', '-', '-', '-', '-']);
+  assert.deepEqual(signalsOf(session(r, 'coord2')), ['-', '-', 'clarified']);
   const t = r.team.total;
-  assert.deepEqual([t.delivered, t.clarified, t.corrected, t.resent], [10, 1, 1, 0]);
-  assert.deepEqual([t.delegations, t.delegationsStarted, t.delegationsClarified, t.delegationsCorrected, t.delegationsResent], [6, 4, 1, 2, 2]);
-  close(t.delegationPer100.clarified, 100 / 6);
-  close(t.delegationPer100.corrected, 200 / 6);
-  close(t.delegationPer100.resent, 200 / 6);
+  assert.deepEqual([t.delivered, t.clarified, t.corrected, t.resent], [18, 2, 2, 0]);
+  assert.deepEqual([t.delegations, t.delegationsStarted, t.delegationsClarified, t.delegationsCorrected, t.delegationsResent], [8, 7, 1, 4, 3]);
+  assert.deepEqual(t.delegationPer100, { clarified: 12.5, corrected: 50, resent: 37.5 });
   const a = r.team.arms;
   assert.deepEqual(Object.keys(a), ['lite', 'terse', 'none']);
   assert.deepEqual(['lite', 'terse', 'none'].map((k) => [a[k].delegations, a[k].delegationsStarted, a[k].delegationsClarified,
-    a[k].delegationsCorrected, a[k].delegationsResent]), [[0, 0, 0, 0, 0], [6, 4, 1, 2, 2], [0, 0, 0, 0, 0]]);
+    a[k].delegationsCorrected, a[k].delegationsResent]), [[0, 0, 0, 0, 0], [8, 7, 1, 4, 3], [0, 0, 0, 0, 0]]);
   assert.equal(a.lite.delegationPer100, null, 'with no prompt, no rate');
-  assert.deepEqual([a.terse.delivered, a.terse.clarified, a.terse.corrected], [6, 1, 1]);
+  assert.deepEqual([a.terse.delivered, a.terse.clarified, a.terse.corrected], [11, 2, 2]);
   const text = render(r);
   assert.match(text, /^delegation signals, heuristics, apart from the SendMessage ones: /m);
   assert.match(text, /^arm +prompts +started +clarified +\/100 +corrected +\/100 +resent +\/100$/m);
-  assert.match(text, /^terse +6 +4 +1 +16\.7 +2 +33\.3 +2 +33\.3$/m);
+  assert.match(text, /^terse +8 +7 +1 +12\.5 +4 +50\.0 +3 +37\.5$/m);
   assert.match(text, /^lite +0 +0 +0 +- +0 +- +0 +-$/m);
-  assert.match(text, /^team +6 +4 +1 +16\.7 +2 +33\.3 +2 +33\.3$/m);
-  assert.match(text, /^team +10 +1 +10\.0 +1 +10\.0 +0 +0\.0$/m, 'the SendMessage table');
+  assert.match(text, /^team +8 +7 +1 +12\.5 +4 +50\.0 +3 +37\.5$/m);
+  assert.match(text, /^team +18 +2 +11\.1 +2 +11\.1 +0 +0\.0$/m, 'the SendMessage table');
   assert.match(text, /no call window: a new session reads before it writes/);
 });
 
 test('the delegation signals leave no prompt text or session names in the output', async () => {
   const json = node(['--project', delegationDir, '--json']);
   assert.equal(json.status, 0, json.stderr);
-  assert.doesNotMatch(json.stdout, /cart|acme|Synthetic|uds:|"(?:text|peer|msgId|ord|hash|title)"/);
+  assert.doesNotMatch(json.stdout, /cart|acme|Synthetic|uds:|"(?:text|peer|msgId|ord|hash|title|key)"/);
   const text = node(['--project', delegationDir]);
   assert.equal(text.status, 0, text.stderr);
   assert.doesNotMatch(text.stdout, /cart|acme|Synthetic|uds:/);
   const records = await meterRecords(transcripts([delegationDir]), { count });
-  for (const m of records.flatMap((x) => x.messages)) for (const key of ['text', 'peer', 'msgId', 'ord', 'hash']) assert.ok(!(key in m), key);
+  for (const m of records.flatMap((x) => x.messages)) for (const key of ['text', 'peer', 'msgId', 'ord', 'hash', 'key']) assert.ok(!(key in m), key);
   for (const x of records) assert.ok(!('first' in x));
 });

@@ -51,9 +51,10 @@
 // - Messages. Sent: SendMessage calls and delegation prompts (mcp__ccd_session__spawn_task); one whose result says
 //   success false, or is an error, failed. Received: messages from a peer (origin.kind "peer"), logged as user lines
 //   or, when they arrive while the session is busy, as queued_command attachments, and counted once per msg_id; and a
-//   delegation prompt that is a session's first message: the one sent before that session started, the newest if
-//   several were, and the original rather than a copy in a continued transcript. That session is the one the prompt
-//   started. Peer messages with handback true are subagent results, and
+//   delegation prompt that is a session's first message. That session is the one the prompt started. Sessions take
+//   prompts in the order they started, each the newest prompt with its text that was sent before it and that no
+//   earlier session took (an original, not a copy in a continued transcript); a transcript that continues or forks a
+//   session keeps that session's prompt. Peer messages with handback true are subagent results, and
 //   Agent tool prompts go to subagents: both are counted apart. A message is written under the arm of the newest copy
 //   in the sender's context. Under lite and terse, every message is that arm's. Otherwise a message is brevity when a
 //   line after its first starts with a SPEC.md section 3 verb (DO, NO, REPLY, ASK, ASKn, An, WILL, DONE, IF, HOLD, GO,
@@ -97,16 +98,18 @@
 //   word; no clarification flagged) is in-sample, not a validation.
 // - Delegation signals, heuristics (issue #58), counted apart from the SendMessage ones so that those rates stay
 //   comparable. The same three flags apply to delivered delegation prompts, by the same rules for what asks about,
-//   corrects or repeats a message. The session a prompt started is also named by the prompt's title. A prompt is:
+//   corrects or repeats a message. A prompt is:
 //   - clarified, when one of the started session's first messages back to the sender asks about it: a message it
 //     sends the sender before the sender writes to it again. No call window applies, since a new session reads before
 //     it writes: on brevity's own transcripts (2026-10-11), its first message to the sender came 10 or more calls in;
-//   - corrected, when the sender's next delivered message to that session corrects or retracts something it sent;
+//   - corrected, when the sender's next delivered message to that session corrects or retracts something it sent.
+//     That message is matched by the transcript that received it, else by name: the session's names or the prompt's
+//     title. In a transcript that continues or forks the sender, a copied prompt stands for its original;
 //   - resent, when it repeats a delivered prompt that the same transcript spawned before it (a similarity of 0.8 or
 //     more): the same delegation spawned again.
 //   Only a prompt whose session was measured (started) can be clarified or corrected. The rates are per 100 delivered
-//   prompts. These rules are untested on traffic: on brevity's own transcripts (2026-10-11), 19 prompts, all started,
-//   flagged 1 clarification and no correction or re-send.
+//   prompts. Nobody has checked these flags by hand: on brevity's own transcripts (2026-10-11), 19 prompts, all
+//   started, flagged 1 clarification and no correction or re-send.
 //
 // Token counts use @anthropic-ai/tokenizer, the legacy tokenizer behind eval/RESULTS.md's counts, when it is installed
 // where this file can import it: run npm i -D @anthropic-ai/tokenizer in the brevity checkout that holds this tool,
@@ -564,7 +567,10 @@ class Transcript {
     item.callIndex = call.index;
     item.ord = call.ord;
     if (name === 'SendMessage') item.peer = [b.input?.to, b.input?.recipient];
-    else if (item.dir === 'delegation-sent') item.peer = [b.input?.title]; // the title names the session it starts
+    else if (item.dir === 'delegation-sent') {
+      item.peer = [b.input?.title]; // the title names the session it starts
+      item.key = b.id; // a copy in a transcript that continues or forks this one has the same id
+    }
     if (item.counted) item.outputRate = this.ctx.prices.output;
     if (item.counted && call.loaded) item.outputRateLoaded = this.ctx.prices.output;
     this.tools.set(b.id, item);
@@ -669,16 +675,16 @@ class Transcript {
       rewriteCost: rewrites.reduce((a, i) => a + i.tokens * i.rewriteRate, 0),
       drops: this.drops,
       duplicates: this.dups.map((d) => ({ ...d })),
-      // The rates and the hash are settled into each message's style and saving, and the text, names, msg_id and call
-      // number into its quality signals; then all of them are removed (see signals and settle).
+      // The rates and the hash are settled into each message's style and saving, and the text, names, msg_id, call
+      // number and a spawn's tool_use id into its quality signals; then all of them are removed (see signals and settle).
       messages: msgs.map((i) => ({
         dir: i.dir, owned: i.owned, counted: i.counted, brevity: i.brevity, arm: i.arm, tokens: i.tokens, failed: i.failed,
         rate: i.rate, outputRate: i.outputRate, rateLoaded: i.rateLoaded, outputRateLoaded: i.outputRateLoaded,
-        callIndex: i.callIndex ?? null, ts: i.ts, hash: i.hash, text: i.text, peer: i.peer, msgId: i.msgId, ord: i.ord,
+        callIndex: i.callIndex ?? null, ts: i.ts, hash: i.hash, text: i.text, peer: i.peer, msgId: i.msgId, ord: i.ord, key: i.key,
       })),
       first: this.firstHuman ? {
         owned: this.firstHuman.owned, counted: this.firstHuman.counted, rate: this.firstHuman.rate, rateLoaded: this.firstHuman.rateLoaded,
-        callIndex: this.firstHuman.callIndex ?? null, candidates: this.firstHuman.candidates, ts: this.firstHuman.ts,
+        callIndex: this.firstHuman.callIndex ?? null, candidates: this.firstHuman.candidates, ts: this.firstHuman.ts, uuid: this.firstHuman.uuid,
       } : null,
       loadStart: this.loadStart,
     };
@@ -717,24 +723,35 @@ export async function meter(sources, { count, prices = PRICES, ratios, ratio, si
 }
 
 // The delegation prompt that started each session (see the header): its first message, when that equals a delivered
-// prompt from another transcript. Of several, the original rather than a copy, and the newest sent before the session
-// started (else the newest).
+// prompt from another transcript. Sessions take prompts in the order they started, each the newest original (not a
+// copy) sent before it that no earlier session took, else the newest. A transcript that continues or forks a session
+// copies its first message, and takes that session's prompt.
 function linkDelegations(records) {
   const byHash = new Map();
   for (const r of records) {
     for (const m of r.messages) if (m.dir === 'delegation-sent' && !m.failed) byHash.set(m.hash, [...(byHash.get(m.hash) ?? []), { m, r }]);
   }
   const time = (ts) => (ts ? Date.parse(ts) : NaN);
-  for (const r of records) {
+  const order = (ts) => time(ts) || 0;
+  const firsts = records.filter((r) => r.first?.candidates.some((c) => byHash.has(c.hash)))
+    .sort((a, b) => Number(b.first.owned) - Number(a.first.owned) || order(a.first.ts) - order(b.first.ts));
+  const taken = new Set();
+  const byLine = new Map(); // the uuid of an owned first message to the link of its session
+  for (const r of firsts) {
     const f = r.first;
-    const hit = f?.candidates.find((c) => byHash.has(c.hash));
-    if (!hit) continue;
+    if (!f.owned && byLine.has(f.uuid)) { Object.assign(f, byLine.get(f.uuid)); continue; }
+    const hit = f.candidates.find((c) => byHash.has(c.hash));
     const all = byHash.get(hit.hash).filter((x) => x.r !== r);
     const owned = all.filter((x) => x.m.owned);
-    const pool = (owned.length ? owned : all).sort((a, b) => (time(a.m.ts) || 0) - (time(b.m.ts) || 0));
+    const pool = (owned.length ? owned : all).sort((a, b) => order(a.m.ts) - order(b.m.ts));
     const before = pool.filter((x) => !(time(x.m.ts) > time(f.ts)));
-    const d = (before.length ? before : pool).at(-1);
-    if (d) Object.assign(f, { hit, delegation: d.m, delegator: d.r });
+    const choices = before.length ? before : pool;
+    const d = choices.filter((x) => !taken.has(x.m)).at(-1) ?? choices.at(-1);
+    if (!d) continue;
+    taken.add(d.m);
+    const link = { hit, delegation: d.m, delegator: d.r };
+    Object.assign(f, link);
+    if (f.owned) byLine.set(f.uuid, link);
   }
 }
 
@@ -823,25 +840,20 @@ function signals(records, window) {
 // `names`, `senderOf`, `original` and `receiver` are the SendMessage signals' matching.
 function delegationSignals(records, { names, senderOf, original, receiver }) {
   const started = new Map(); // prompt to the transcripts of the session it started, with its continuations and forks
-  const ownedByHash = new Map();
+  const ownedByKey = new Map();
   for (const r of records) {
     const d = r.first?.delegation;
     if (d) started.set(d, [...(started.get(d) ?? []), r]);
     for (const m of r.messages) {
       if (m.dir !== 'delegation-sent') continue;
       m.started = m.clarified = m.corrected = m.resent = false;
-      if (m.owned && !m.failed) ownedByHash.set(m.hash, [...(ownedByHash.get(m.hash) ?? []), m]);
+      if (m.owned) ownedByKey.set(m.key, m);
     }
   }
   for (const d of started.keys()) d.started = true;
-  // A copy of a prompt in a transcript that continues or forks its sender stands for the original.
-  const originalOf = (d) => {
-    if (d.owned) return d;
-    const all = ownedByHash.get(d.hash) ?? [];
-    return all.length === 1 ? all[0] : d;
-  };
-  // Whether a delivered message goes to one of the transcripts `rs`, or to a session with one of `more` names.
-  const goesTo = (n, rs, more = []) => rs.includes(receiver(n)) || samePeer(n.peer, [...rs.flatMap((x) => names.get(x)), ...more]);
+  // A copy of a prompt in a transcript that continues or forks its sender stands for the original, the prompt with
+  // the same tool_use id.
+  const originalOf = (d) => (d.owned ? d : ownedByKey.get(d.key) ?? d);
   const delivered = (m) => SENT.includes(m.dir) && !m.failed;
   for (const r of records) {
     // Clarified: the started session's messages to the sender, until the sender writes to it again, ask about the prompt.
@@ -850,7 +862,7 @@ function delegationSignals(records, { names, senderOf, original, receiver }) {
       const C = r.first.delegator;
       for (const m of r.messages) {
         if (m.dir === 'received' && (senderOf.get(original(m)) === C || samePeer(m.peer, names.get(C)))) break;
-        if (m.dir !== 'sent' || !delivered(m) || !goesTo(m, [C])) continue;
+        if (m.dir !== 'sent' || !delivered(m) || !(receiver(m) === C || samePeer(m.peer, names.get(C)))) continue;
         if (m.owned && isClarification(m.text, d.text)) { d.clarified = true; break; }
       }
     }
@@ -858,8 +870,14 @@ function delegationSignals(records, { names, senderOf, original, receiver }) {
     ms.forEach((n, j) => {
       if (n.dir !== 'delegation-sent' || !delivered(n)) return;
       const o = originalOf(n);
-      // Corrected: the sender's next delivered message to the session the prompt started.
-      const next = ms.slice(j + 1).find((m) => m.dir === 'sent' && delivered(m) && goesTo(m, started.get(o) ?? [], n.peer));
+      // Corrected: the sender's next delivered message to the session the prompt started, matched by the transcript
+      // that received it, else by that session's names or the prompt's title. A prompt that started none is not checked.
+      const rs = started.get(o);
+      const toIt = (m) => {
+        const t = receiver(m);
+        return t ? rs.includes(t) : samePeer(m.peer, [...rs.flatMap((x) => names.get(x)), ...n.peer]);
+      };
+      const next = rs && ms.slice(j + 1).find((m) => m.dir === 'sent' && delivered(m) && toIt(m));
       if (next && isCorrection(next.text)) o.corrected = true;
       // Resent: it repeats a prompt that this transcript spawned before it.
       if (ms.slice(0, j).some((m) => m.dir === 'delegation-sent' && delivered(m) && similarity(m.text, n.text) >= RESEND_SIMILARITY)) n.resent = true;
@@ -909,7 +927,7 @@ function settle(records, ratios) {
       m.saving = s * (m.rate + m.outputRate);
       m.savingLoaded = s * (m.rateLoaded + m.outputRateLoaded);
       // Keep numbers only: no message text, session names or fingerprints leave this function.
-      for (const key of ['rate', 'outputRate', 'rateLoaded', 'outputRateLoaded', 'hash', 'text', 'peer', 'msgId', 'ord']) delete m[key];
+      for (const key of ['rate', 'outputRate', 'rateLoaded', 'outputRateLoaded', 'hash', 'text', 'peer', 'msgId', 'ord', 'key']) delete m[key];
     }
     delete r.first;
   }

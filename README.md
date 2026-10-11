@@ -204,8 +204,10 @@ It matches a reply to its addressee by name. A failed send never counts.
 
 Delegation prompts (`spawn_task`) get the same three signals in a table of their own, per arm and for the team, so
 that the SendMessage rates stay comparable. They are heuristics too. A prompt starts the session whose first message
-it is, and that session is also known by the prompt's title. Rates are per 100 delivered prompts, and `started`
-counts the prompts whose session the meter read: only those can be clarified or corrected. A prompt is:
+it is, and that session is also known by the prompt's title. When the same text was spawned more than once, each
+session takes the newest such prompt sent before it that no earlier session took. A `spawn_task` whose result is an
+error counts as a failed send, not as a prompt. Rates are per 100 delivered prompts, and `started` counts the
+prompts whose session the meter read: only those can be clarified or corrected. A prompt is:
 
 - **clarified** when one of the started session's first messages back to the sender, sent before the sender writes
   to it again, asks about the prompt. No call window applies, because a new session reads before it writes.
@@ -218,8 +220,8 @@ On this project's transcripts, as of 2026-10-11, 19 prompts all started a measur
 The exact rules are in the header of [tools/meter.mjs](tools/meter.mjs). Like the rest of the output, the signals are
 numbers only: the meter never prints message text, and prints session titles only with `--titles`.
 
-Token counts use `@anthropic-ai/tokenizer` when it is installed next to the meter, else chars/4, and the output
-says which. Set `BREVITY_METER_TOKENIZER=chars/4` to use chars/4 even when the tokenizer is installed, for example
+Token counts use `@anthropic-ai/tokenizer` when it is installed in the brevity checkout that holds the meter, else
+chars/4, and the output says which. Set `BREVITY_METER_TOKENIZER=chars/4` to use chars/4 even when the tokenizer is installed, for example
 to compare with a run on a machine without it. The meter's tests set it, so they pass either way.
 
 ## Where it works
