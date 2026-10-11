@@ -3,26 +3,96 @@
 Every entry follows [RELEASING.md](RELEASING.md): a criticality level, why the release exists, what changed, the
 evidence, compatibility and upgrade steps. Versions follow semantic versioning read from the protocol's side.
 
-## [Unreleased]
+## [0.7.0] - 2026-10-11
 
-Changes waiting on `next` for the next release (see [RELEASING.md](RELEASING.md)).
+**Criticality:** normal. The cost model now prices the spec as Claude Code bills it, forked sessions get the current
+copy, and the meter weighs whether sessions understood each other, not only what each arm costs.
 
-- **#6, normal.** The hook now also runs when a session is forked (`--fork-session`, `/fork` or `/branch`), which
-  Claude Code 2.1.214 and later reports as the source `fork`. A fork kept its parent's copy, so after a plugin
-  update, a dictionary edit or an arm change it went on with the old one. It now gets the current copy, as a resume
-  does. An unchanged copy is not added twice: Claude Code drops identical items on a fork too.
-- **#40, normal.** `tools/cost-model.mjs` prices cache reads by `--model`, which defaults to `claude-opus-5-5`
-  (0.05x; 0.025x on Claude Fable 5.1 and Claude Mythos 5.1, 0.1x on other models), and cache writes at 2x, the 1-hour
-  rate Claude Code paid on every call measured in #11 (`--write 1.25` for 5-minute caching). It prints which prices
-  ran. New options add the costs it left out: `--reinject` and `--reinject-every` for re-injection after
-  compactions and resumes, `--idle-misses` for idle cache misses, and `--skill-entry 143` for the plugin's skill
-  entry. Their defaults add nothing, and the output names `tools/meter.mjs`, which measures them. The README,
-  `docs/costs.md` and `eval/RESULTS.md` figures are rerun: a 200-call session breaks even at 64-92 messages, not
-  76-101 (104-149 at a single pass's 37, not 123-164), and the hub team's largest read-only card is 276 tokens, not
-  309, so the 300-token card loses.
-- **#52, normal.** `tools/meter.mjs` counts three heuristic quality signals per arm and for the team, each as a count
-  and a rate per 100 delivered messages: clarification requests (`--clarify-window`, 5 calls by default), corrections
-  and re-sends. Numbers only, as before.
+### Why
+
+- **#40, normal.** `tools/cost-model.mjs` priced cache reads at 0.1x and writes at the 5-minute rate (1.25x) by
+  default. Claude Code on Claude Opus 5.5 bills reads at 0.05x, and in the sessions measured in #11 it wrote every
+  cache entry at the 1-hour rate (2x). The model also left out re-injection, idle cache misses and the plugin's skill
+  entry, so the published break-even and team figures used prices nobody paid.
+- **#6, normal.** Claude Code 2.1.214 and later reports a forked session to SessionStart as `fork`, which the hook's
+  matcher left out. Real forks kept the parent's copy, so after a plugin update, a dictionary edit or an arm change
+  they went on with the old one.
+- **#52, normal.** `tools/meter.mjs` compared arms on cost only, which favours the smallest load by construction.
+  What decides between arms is whether the recipient still understands the messages.
+
+### Changes
+
+- **Tools:**
+  - `tools/cost-model.mjs` prices cache reads by `--model`, which defaults to `claude-opus-5-5`: 0.05x, 0.025x on
+    Claude Fable 5.1 and Claude Mythos 5.1, and 0.1x on other models. Cache writes default to 2x, the 1-hour rate, and
+    `--write 1.25` sets 5-minute caching. The tool prints which prices ran.
+  - New options add the costs the cost model left out: `--reinject` and `--reinject-every`, `--idle-misses` and
+    `--skill-entry`. Their defaults add nothing. The default hub threshold counts only the marginal cost of loading,
+    and with `--skill-entry` the tool also prints the break-even against having no plugin (#40).
+  - `tools/meter.mjs` counts three heuristic quality signals per arm and for the team, as counts and rates per 100
+    delivered messages: clarification requests (`--clarify-window`, 5 calls by default), corrections and re-sends.
+    The rules were tuned on this project's own transcripts and are labelled in-sample. Delegation prompts are not
+    checked yet (#58) (#52).
+- **Claude Code plugin:** the SessionStart matcher adds `fork`, so a forked session gets the current copy of its
+  arm, as a resume does (#6).
+- **Docs:**
+  - Every figure that README.md, `docs/costs.md` and eval/RESULTS.md quote from the cost model is re-run. A 200-call
+    session now breaks even at 64-92 messages at 60 tokens saved, not 76-101, and at 104-149 at a single pass's 37,
+    not 123-164. The hub team's largest read-only card is 276 tokens, not 309, so the 300-token card now loses.
+    Where an old-price figure stays, it is labelled.
+  - New eval/METHOD.md writes up the evaluation method for reuse (#27, merged on `main` as #54).
+
+### Evidence
+
+- **Cost model.** Review re-ran every published figure with the new defaults: all reproduce. The old figures
+  reproduce exactly with `--model claude-sonnet-5-5 --write 1.25`. The review found 4 defects, all fixed before
+  merge, among them a hub threshold that counted the skill entry.
+- **Meter.**
+  - The earlier results do not change: on this project's own transcripts it still matches the earlier private replay
+    (#11) on sessions, calls, bills and copies.
+  - Review found 5 defects in the signals, all fixed before merge.
+  - On this project's transcripts, 4 of the 5 flagged corrections are real, and no clarification is flagged. This is
+    an in-sample check, not a validation.
+- **Hook.** The four `hooks.json` commands were run from inside a temp folder per arm, on the sources startup,
+  resume, fork and compact. The characters in part 0 were the same on all four sources:
+
+  | arm | part 0 |
+  |---|---|
+  | brevity, or no arm file | 9,277 |
+  | lite | 1,461 |
+  | terse | 759 |
+  | off | 26 |
+  | no `.brevity/` | nothing |
+
+  No part contained a CR.
+- **Plugin.**
+  - `claude plugin validate .` passes.
+  - Real `claude -p --plugin-dir` runs, with a signed-in CLI, the release commit as the plugin and the installed
+    plugin excluded (`--setting-sources project,local`):
+    - a session in a folder with arm `terse` saw the terse marker and the skill;
+    - a fork of it (`--resume <id> --fork-session`) saw the same single copy;
+    - after the arm was switched to `lite`, another fork logged `SessionStart:fork` and saw the terse copy followed
+      by the lite one;
+    - a folder without `.brevity/` saw no marker.
+- **Spec size:** 99 lines, 9,221 characters, 2,680 legacy tokens; only the version in the title changes.
+- **Checks:**
+  - `node scripts/release-check.mjs --base origin/main`, `node tools/build-adapters.mjs --check` and the tools'
+    tests (70) pass.
+  - One meter test fails when the optional `@anthropic-ai/tokenizer` is installed (#60). CI runs without it.
+
+### Compatibility
+
+Every message written under 0.6 decodes the same: the spec changes only the version in its title. The hook loads
+what it loaded before, now also on a fork.
+
+The cost model's defaults change. A script that relied on the old 0.1x reads and 1.25x writes passes
+`--model claude-sonnet-5-5 --write 1.25`. The meter's JSON adds the quality-signal fields and keeps every earlier key.
+
+### Upgrade
+
+- **Claude Code plugin users:** run `/plugin marketplace update brevity`.
+- **Cost model:** check the printed prices line.
+- **Other surfaces:** projects that copy SPEC.md, the Cursor rule or the AGENTS.md block re-copy them.
 
 ## [0.6.0] - 2026-10-10
 
