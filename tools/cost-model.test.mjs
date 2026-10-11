@@ -253,9 +253,27 @@ test('--skill-entry: every session carries the entry under every policy, and the
     assert.equal(entry.sessions[i].net['first-message'], plain.sessions[i].net['first-message']);
   });
   assert.equal(entry.sessions[1].net['hub+first'], plain.sessions[1].net['hub+first']);
-  // The break-even counts the entry as part of the load.
+  // The break-even against no plugin counts the entry as part of the load.
   assert.equal(breakEven({ load: 3200, saving: 60, turns: 200, sentShare: 1, extras: { skillEntry: 143 } }),
     breakEven({ load: 3343, saving: 60, turns: 200, sentShare: 1 }));
+});
+
+test('--skill-entry does not change which sessions are hubs: every session pays it, loaded or not', async () => {
+  // 78 messages each: above the break-even of loading (76), below the one against no plugin (79).
+  const two = [{ name: 'a', turns: 200, sent: 39, received: 39 }, { name: 'b', turns: 200, sent: 39, received: 39 }];
+  const loading = breakEven({ load: 3200, saving: 60, turns: 200, sentShare: 0.5 });
+  const noPlugin = breakEven({ load: 3200, saving: 60, turns: 200, sentShare: 0.5, extras: { skillEntry: 143 } });
+  assert.deepEqual([loading, noPlugin], [76, 79]);
+  const r = model(two, { load: 3200, saving: 60, extras: { skillEntry: 143 } });
+  assert.equal(r.hubs, 2);
+  assert.deepEqual(r.sessions.map((s) => s.breakEven), [76, 76]);
+  const plain = model(two, { load: 3200, saving: 60 });
+  close(r.policies[1].net, plain.policies[1].net - 2 * 143 * (PRICES.write + PRICES.read * 200));
+  // The CLI prints the break-even of loading, and the one against no plugin, labelled.
+  const cliRun = await run(['--saving', '60', '--load-tokens', '3200', '--turns', '200', '--skill-entry', '143']);
+  assert.deepEqual([cliRun.breakEven.half, cliRun.breakEvenNoPlugin.half], [76, 79]);
+  assert.match(render(cliRun), /against no plugin, counting the 143-token skill entry that every session carries: \d+ if it sends them all, \d+ if it receives them all, 79 half and half/);
+  assert.equal((await run(['--saving', '60', '--load-tokens', '3200'])).breakEvenNoPlugin, undefined);
 });
 
 test('the extra costs default to 0 and change no result until set', () => {
@@ -382,6 +400,9 @@ test('the CLI names the extra costs it adds and leaves out, and points to tools/
 test('the CLI refuses bad input', () => {
   assert.equal(cli('--saving', '65', '--load-tokens', '1', '--idle-misses', '1.5').status, 2, 'a share is at most 1');
   assert.equal(cli('--saving', '65', '--load-tokens', '1', '--reinject-every', '0').status, 2);
+  const fraction = cli('--saving', '65', '--load-tokens', '1', '--reinject-every', '2.5');
+  assert.equal(fraction.status, 2, 'calls are whole');
+  assert.match(fraction.stderr, /--reinject-every must be a whole number > 0/);
   assert.equal(cli('--saving', '65', '--load-tokens', '1', '--reinject', '-1').status, 2);
   assert.equal(cli('--saving', '65', '--load-tokens', '1', '--model', ' ').status, 2);
   assert.equal(cli('--saving', '65', '--load-tokens', '1', '--model').status, 2, '--model needs a value');

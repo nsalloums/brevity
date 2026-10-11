@@ -196,7 +196,8 @@ older prices.
 All of these leave out costs that the cost model adds only on request: the hook's re-injection after each
 compaction and resume (`--reinject`), idle cache misses (`--idle-misses`) and the plugin's 143-token skill entry
 (`--skill-entry 143`). With the skill entry, one re-injection and idle misses on 1% of calls, rates picked to
-illustrate, the 200-call session needs 84-112 messages at 60 tokens saved
+illustrate, the 200-call session needs 84-112 messages at 60 tokens saved to beat having no plugin at all, and
+80-107 to beat having the plugin without loading the spec, since every session carries the entry either way
 (`... --skill-entry 143 --reinject 1 --idle-misses 0.01`). [tools/meter.mjs](../tools/meter.mjs) measures these
 costs on a real team's transcripts.
 

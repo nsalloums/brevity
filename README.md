@@ -102,7 +102,8 @@ The hub gains about 0.54 million, but each peer loses 24,000 to 30,000, because 
 to save on a handful of messages. For this team, not using brevity beats every way brevity can load today. The
 cost model finds that a read-only reader card of about 210 to 280 tokens would keep the team ahead: up to 276
 tokens under its default assumptions, and up to 209 if each peer's first message arrives at its first call. The
-300-token card in the table is past that limit; it would come out ahead only with 5-minute cache writes. The
+300-token card in the table is past that limit; it would come out ahead only with 5-minute cache writes, with no
+stub, or as a card that also writes. The
 plugin's skill entry and one re-injection per session lower the limit to 163 tokens. That is a modeled result
 under the assumptions the tool prints, not a shipped feature; brevity has no reader card, and
 [issue #11](https://github.com/nsalloums/brevity/issues/11) tracks the design. All of these figures use the audited

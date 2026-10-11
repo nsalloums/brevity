@@ -42,7 +42,9 @@
 //   --skill-entry N     the tokens of the plugin's entry in the skill listing (default 0; 143 in the legacy
 //                       count for the Claude Code plugin). The plugin lists the skill in every session, so each
 //                       session carries the entry from its first call under every policy, and net 0 means no
-//                       plugin. Where a policy carries the stub, the stub is that entry and counts once.
+//                       plugin. Where a policy carries the stub, the stub is that entry and counts once. The
+//                       break-even that makes a session a hub leaves the entry out, since a session pays it
+//                       loaded or not; the output adds the break-even against no plugin, with the entry.
 // Left out even then: a compaction or resume also drops messages before the session ends, which cuts the saving.
 //
 // S + D counts SPEC.md (this checkout's, or --spec) plus the nearest .brevity/DICT.md and
@@ -153,8 +155,9 @@ function saved(s, F, sent, received, saving, p, x) {
   return saving * (sent * p.output + received * p.write + (perCall(p, x) * callsLeft(s, F) * (sent + received)) / n);
 }
 
-// Messages a session with `turns` calls needs before the spec (and the skill entry) pays for itself, when it
-// loads at its first call and its messages are spread evenly (each carried for turns / 2 calls on average).
+// Messages a session with `turns` calls needs before the spec pays for itself, when it loads at its first call and
+// its messages are spread evenly (each carried for turns / 2 calls on average). With extras.skillEntry, the entry
+// counts too: that is the break-even against no plugin, not the marginal cost of loading.
 export function breakEven({ load, saving, turns, sentShare, prices = PRICES, extras }) {
   const x = { ...EXTRAS, ...extras };
   const perMessage = saving * (sentShare * prices.output + (1 - sentShare) * prices.write + (perCall(prices, x) * turns) / 2);
@@ -198,7 +201,10 @@ export function model(sessions, {
   const x = { ...EXTRAS, ...extras };
   const used = reader === undefined ? POLICIES : [...POLICIES, 'hub+reader'];
   const sentShare = (s) => (messages(s) ? s.sent / messages(s) : 0.5);
-  const be = sessions.map((s) => breakEven({ load, saving, turns: s.turns, sentShare: sentShare(s), prices, extras: x }));
+  // A hub's messages pay for loading the spec. The skill entry is no part of that: every session carries it, loaded
+  // or not.
+  const loading = { ...x, skillEntry: 0 };
+  const be = sessions.map((s) => breakEven({ load, saving, turns: s.turns, sentShare: sentShare(s), prices, extras: loading }));
   const hub = sessions.map((s, i) => messages(s) >= (threshold ?? be[i]));
   const { m, converged } = pairs(sessions);
   const rows = sessions.map((s, i) => {
@@ -334,7 +340,9 @@ function parseArgs(argv) {
   };
   for (const key of ['saving', 'turns', 'threshold', 'stub', 'load-tokens', 'output', 'write', 'read', 'rare', 'reader-tokens',
     'reinject', 'reinject-every', 'idle-misses', 'skill-entry']) num(key);
-  if (opts['reinject-every'] === 0) throw new Error('--reinject-every must be a number > 0');
+  if (opts['reinject-every'] !== undefined && !(Number.isInteger(opts['reinject-every']) && opts['reinject-every'] > 0)) {
+    throw new Error('--reinject-every must be a whole number > 0');
+  }
   if (opts['idle-misses'] > 1) throw new Error('--idle-misses is a share of calls, from 0 to 1');
   if (opts.model !== undefined && !opts.model.trim()) throw new Error('--model needs a model id, such as claude-opus-5-5');
   if (opts['reader-writes'] && opts['reader-tokens'] === undefined) throw new Error('--reader-writes needs --reader-tokens');
@@ -420,8 +428,10 @@ export async function run(argv, { cwd = process.cwd() } = {}) {
   const result = { tokenizer: tok.name, model: modelId, prices, priced, extras, load, saving, turns };
 
   if (saving) {
-    const at = (sentShare) => breakEven({ load: load.tokens, saving: saving.tokens, turns, sentShare, prices, extras });
-    result.breakEven = { turns, allSent: at(1), allReceived: at(0), half: at(0.5) };
+    const at = (sentShare, e) => breakEven({ load: load.tokens, saving: saving.tokens, turns, sentShare, prices, extras: e });
+    const loading = { ...extras, skillEntry: 0 };
+    result.breakEven = { turns, allSent: at(1, loading), allReceived: at(0, loading), half: at(0.5, loading) };
+    if (extras.skillEntry) result.breakEvenNoPlugin = { allSent: at(1, extras), allReceived: at(0, extras), half: at(0.5, extras) };
   }
   if (sessions && saving) {
     const first = o.first ?? 'uniform';
@@ -507,6 +517,11 @@ export function render(r) {
     const b = r.breakEven;
     out.push('', `break-even for a session with ${fmt(b.turns)} calls that loads at its first call:`,
       `  ${fmt(b.allSent)} messages if it sends them all, ${fmt(b.allReceived)} if it receives them all, ${fmt(b.half)} half and half`);
+    const e = r.breakEvenNoPlugin;
+    if (e) {
+      out.push(`  against no plugin, counting the ${fmt(r.extras.skillEntry)}-token skill entry that every session carries: `
+        + `${fmt(e.allSent)} if it sends them all, ${fmt(e.allReceived)} if it receives them all, ${fmt(e.half)} half and half`);
+    }
   }
   if (r.policies) {
     const n = r.sessions.length;
