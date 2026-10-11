@@ -15,6 +15,13 @@
 // "terse". "terse" loads the terse arm (80 tokens), receives M1 and answers with M2. "switch" loads lite and sends M3,
 // then is resumed 90 minutes later under off (the marker alone, 26 tokens) with the lite copy still in context, and
 // sends M4, which has a verb line. "plain" loads nothing.
+//
+// tools/fixtures/meter/quality holds the quality signals. "lead" (terse) sends "dev" (lite) Q1, which dev asks about
+// with "Did you mean"; Q3, whose `tests/cart.test.mjs` dev names in a question; Q5, answered with a question that
+// names nothing from it; Q7, which Q8 corrects; and Q13, which dev asks about with "Which one" 5 calls later, outside
+// the default window. It sends "ops" (no arm) Q9, then Q10 almost word for word with no reply between, and after
+// ops answers, Q12, the same text again. Then a send that fails and its re-send. Dev sends lead Q15, which Q16
+// withdraws. Ops logs no msg_id on what it receives, and lead writes to it as "ops [a1b2c3]".
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
@@ -24,7 +31,8 @@ import test, { after } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { run as costModel } from './cost-model.mjs';
 import {
-  callBill, defaultProjects, isBrevity, meter as meterRecords, projectFolder, readPrice, render, run, transcripts, writeRate,
+  callBill, defaultProjects, isBrevity, isClarification, isCorrection, meter as meterRecords, projectFolder, readPrice, render,
+  run, samePeer, similarity, transcripts, writeRate,
 } from './meter.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -130,7 +138,7 @@ test('sent, failed and received messages, with the estimated saving where each o
   assert.deepEqual(hub.tally, {
     sentBrevity: 2, sentLite: 0, sentTerse: 0, sentProse: 1, failed: 1, deliveredBrevity: 1, deliveredLite: 0, deliveredTerse: 0,
     deliveredProse: 1, delegations: 1, receivedBrevity: 1, receivedLite: 0, receivedTerse: 0, receivedProse: 0, subagentPrompts: 1,
-    handbacks: 1, messageTokens: 50 + 40 + 100 + 60, brevityTokens: 50 + 100 + 60,
+    handbacks: 1, messageTokens: 50 + 40 + 100 + 60, brevityTokens: 50 + 100 + 60, delivered: 2, clarified: 0, corrected: 0, resent: 0,
   });
   // The peer's first message is the hub's delegation prompt: written at its first call (5-minute, 1.25), read at
   // calls 2 and 3, gone at the resume.
@@ -371,7 +379,7 @@ test('a received message takes the arm and style of the sent message with the sa
   assert.deepEqual(session(r, 'terse').tally, {
     sentBrevity: 0, sentLite: 0, sentTerse: 1, sentProse: 0, failed: 0, deliveredBrevity: 0, deliveredLite: 0, deliveredTerse: 1,
     deliveredProse: 0, delegations: 0, receivedBrevity: 0, receivedLite: 1, receivedTerse: 0, receivedProse: 0, subagentPrompts: 0,
-    handbacks: 0, messageTokens: 16 + 25, brevityTokens: 0,
+    handbacks: 0, messageTokens: 16 + 25, brevityTokens: 0, delivered: 1, clarified: 0, corrected: 0, resent: 0,
   });
 });
 
@@ -437,4 +445,113 @@ test('--team-json counts the messages that save, each at its own ratio', async (
   ]);
   const mean = (saved(25, 0.087) + saved(16, 0.102) + saved(25, 0.087) + saved(18, 0.087)) / 4;
   assert.match(res.stdout, new RegExp(`--saving ${+mean.toFixed(1)} `));
+});
+
+// The quality fixture, read with chars/4.
+const qualityDir = join(here, 'fixtures', 'meter', 'quality');
+const quality = (...args) => run(['--project', qualityDir, ...args], { count, cwd: dir });
+// Each sent message's signals, in order: "-" for none, "failed" for a send that failed.
+const signalsOf = (s) => messages(s, 'sent').map((m) => (m.failed ? 'failed'
+  : ['clarified', 'corrected', 'resent'].filter((k) => m[k]).join('+') || '-'));
+
+test('a clarification is a question with a clarification word, or one that names or quotes the message', () => {
+  const got = 'Rebase feat/cart on next before you push.\nThe base moved at 9c1e2a7f0.';
+  assert.ok(isClarification('Did you mean feat/cart or feat/cart-v2?', got));
+  assert.ok(isClarification('Which one: next or main?', 'Rebase on the new base.'));
+  assert.ok(isClarification('Got it.\nASK which one: next or main', 'Rebase on the new base.'), 'an ASK line is a question');
+  assert.ok(!isClarification('Got it.\nASK which base: next or main', 'Rebase on the new base.'), 'that names nothing from it');
+  assert.ok(isClarification('Please clarify the base.', got), 'a request to clarify needs no question mark');
+  assert.ok(isClarification('Is 9c1e2a7f0 the old base or the new one?', got), 'a question that names a SHA from it');
+  assert.ok(isClarification('Is feat/cart the branch to rebase?', got), 'or a branch');
+  assert.ok(isClarification('Does "the base moved" mean next moved?', got), 'or quotes it');
+  assert.ok(!isClarification('Should I also update the docs?', got), 'a question that names nothing from it');
+  assert.ok(!isClarification('Rebased feat/cart on 9c1e2a7f0.', got), 'no question');
+  assert.ok(!isClarification('Rebased feat/cart. The release is a clarification of 0.4.', got), 'a clarification word outside a question');
+  assert.ok(!isClarification('May I also rebase feat/cart-v2 on 9c1e2a7f0?', got), 'leave for its own step');
+  assert.ok(!isClarification('ASK I rebase feat/cart now', got), 'leave, as an ASK line');
+  assert.ok(!isClarification('Rebased feat/cart; it keeps `a ?? b` as is.', got), 'code is not a question');
+  assert.ok(!isClarification('Is #5 merged?', 'Merge #52 first.'), '#5 is not #52');
+});
+
+test('a correction is a correction phrase, a withdrawal, or a FIX line about the sender\'s own words', () => {
+  assert.ok(isCorrection('Correction: #43 then #41.'));
+  assert.ok(isCorrection('I was wrong about the base: it is next.'));
+  assert.ok(isCorrection('Please disregard my last message.'));
+  assert.ok(isCorrection('3f9a0c2e1 failed -> WITHDRAWN, the runner was down.'));
+  assert.ok(isCorrection('The size was off.\nFIX «20 KB» -> 32 KB (mine)'));
+  assert.ok(!isCorrection('Thanks.\nFIX your «12 tests» -> 14 tests'), 'a FIX of the recipient\'s words');
+  assert.ok(!isCorrection('Fix the rounding in src/cart.ts.'), 'a request to fix something');
+  assert.ok(!isCorrection('Merge order: #41 then #43.'));
+});
+
+test('a re-send is a message almost word for word; names match without a tag or past a cut', () => {
+  assert.equal(similarity('Please report the CI status of #44.', 'Please report the CI status of #44.'), 1);
+  close(similarity('Please report the CI status of #44.', 'Please report the CI status of #44 now.'), 12 / 13);
+  assert.ok(similarity('Merge order: #41 then #43.', 'Correction: #43 then #41.') < 0.8);
+  assert.equal(similarity('', 'x y'), 0);
+  assert.ok(samePeer(['ops [a1b2c3]'], ['uds:fixture-ops', 'ops']), 'a trailing tag is left out');
+  assert.ok(samePeer(['Fix the cart rounding (#12) and open…'], [null, 'Fix the cart rounding (#12) and open a PR']), 'a cut name');
+  assert.ok(samePeer(['uds:fixture-ops'], ['uds:fixture-ops', 'ops']));
+  assert.ok(!samePeer(['dev'], ['uds:fixture-ops', 'ops']));
+  assert.ok(!samePeer([undefined], [undefined]));
+});
+
+test('each delivered message is clarified, corrected or resent by the rules; a failed send never is', async () => {
+  const r = await quality();
+  // Q1 Q3 Q5 Q7 Q8 Q9 Q10 Q12, the failed send, its re-send, Q13.
+  assert.deepEqual(signalsOf(session(r, 'lead')), ['clarified', 'clarified', '-', 'corrected', '-', '-', 'resent', '-', 'failed', '-', '-']);
+  // Q2 Q4 Q6, the reply to Q8, Q14, Q15 (withdrawn by Q16), Q16.
+  assert.deepEqual(signalsOf(session(r, 'dev')), ['-', '-', '-', '-', '-', 'corrected', '-']);
+  assert.deepEqual(signalsOf(session(r, 'ops')), ['-']);
+  const lead = session(r, 'lead').tally;
+  assert.deepEqual([lead.delivered, lead.clarified, lead.corrected, lead.resent], [10, 2, 1, 1]);
+});
+
+test('a clarification counts only within the window of the recipient\'s calls', async () => {
+  // Dev asks about Q13 at its 6th call after Q13 arrives: 5 calls later, outside the default window of 5.
+  assert.equal((await quality()).signals.clarifyWindow, 5);
+  const wide = await quality('--clarify-window', '6');
+  assert.equal(signalsOf(session(wide, 'lead')).at(-1), 'clarified');
+  assert.equal(wide.team.total.clarified, 3);
+  // Dev asks about Q1 and Q3 at the first call after each arrives, inside the smallest window.
+  assert.equal((await quality('--clarify-window', '1')).team.total.clarified, 2);
+  for (const bad of ['0', '2.5', 'soon']) {
+    const res = spawnSync(process.execPath, [tool, '--project', qualityDir, '--clarify-window', bad], { encoding: 'utf8', cwd: dir });
+    assert.equal(res.status, 2, bad);
+    assert.match(res.stderr, /--clarify-window must be a whole number of calls >= 1/);
+  }
+});
+
+test('the signals are counted per arm and for the team, per 100 SendMessage deliveries', async () => {
+  const r = await quality();
+  const a = r.team.arms;
+  assert.deepEqual(Object.keys(a), ['lite', 'terse', 'none']);
+  assert.deepEqual(['lite', 'terse', 'none'].map((k) => [a[k].delivered, a[k].clarified, a[k].corrected, a[k].resent]), [
+    [7, 0, 1, 0], [10, 2, 1, 1], [1, 0, 0, 0],
+  ]);
+  assert.deepEqual(a.terse.per100, { clarified: 20, corrected: 10, resent: 10 });
+  close(a.lite.per100.corrected, 100 / 7);
+  const t = r.team.total;
+  assert.deepEqual([t.delivered, t.clarified, t.corrected, t.resent], [18, 2, 2, 1]);
+  close(t.per100.clarified, 200 / 18);
+  assert.deepEqual(r.signals, { heuristic: true, clarifyWindow: 5, resendSimilarity: 0.8 });
+  // With no delivery, no rate.
+  assert.equal((await arms()).team.arms.none.per100, null);
+  const text = render(r);
+  assert.match(text, /^quality signals, heuristics: /m);
+  assert.match(text, /^arm +delivered +clarified +\/100 +corrected +\/100 +resent +\/100$/m);
+  assert.match(text, /^terse +10 +2 +20\.0 +1 +10\.0 +1 +10\.0$/m);
+  assert.match(text, /^lite +7 +0 +0\.0 +1 +14\.3 +0 +0\.0$/m);
+  assert.match(text, /^team +18 +2 +11\.1 +2 +11\.1 +1 +5\.6$/m);
+  assert.match(text, /within its next 5 calls, asks about it/);
+});
+
+test('the signals leave no message text or session names in the output', async () => {
+  const json = spawnSync(process.execPath, [tool, '--project', qualityDir, '--json'], { encoding: 'utf8', cwd: dir });
+  assert.equal(json.status, 0, json.stderr);
+  assert.doesNotMatch(json.stdout, /feat\/cart|tests\/cart|Correction|WITHDRAWN|runner|uds:|a1b2c3|"(?:text|peer|msgId|ord)"/);
+  const text = spawnSync(process.execPath, [tool, '--project', qualityDir], { encoding: 'utf8', cwd: dir });
+  assert.doesNotMatch(text.stdout, /feat\/cart|uds:|a1b2c3/);
+  const records = await meterRecords(transcripts([qualityDir]), { count });
+  for (const m of records.flatMap((x) => x.messages)) for (const key of ['text', 'peer', 'msgId', 'ord', 'hash']) assert.ok(!(key in m), key);
 });

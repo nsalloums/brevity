@@ -3,6 +3,14 @@
 Every entry follows [RELEASING.md](RELEASING.md): a criticality level, why the release exists, what changed, the
 evidence, compatibility and upgrade steps. Versions follow semantic versioning read from the protocol's side.
 
+## [Unreleased]
+
+Changes waiting on `next` for the next release (see [RELEASING.md](RELEASING.md)).
+
+- **#52, normal.** `tools/meter.mjs` counts three heuristic quality signals per arm and for the team, each as a count
+  and a rate per 100 delivered messages: clarification requests (`--clarify-window`, 5 calls by default), corrections
+  and re-sends. Numbers only, as before.
+
 ## [0.6.0] - 2026-10-10
 
 **Criticality:** normal. Two new surfaces measure on real work whether brevity pays: a meter that reads a team's own

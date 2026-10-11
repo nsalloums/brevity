@@ -165,6 +165,25 @@ from the single-pass pilot: brevity 0.154, lite 0.087 and terse 0.102. Messages 
 `--saving-ratio` replaces the other three. `--team-json team.json` writes your sessions in the cost model's format,
 and the output gives the command that compares the model with the measurement.
 
+Cost alone favours the smallest load, so the meter also counts three quality signals, per arm and for the team: the
+count and the rate per 100 delivered SendMessage messages. They are heuristics, read from the text of the messages
+and the replies around them. They miss some cases and flag others wrongly, so treat them as pointers to check by
+hand, not as a measure of loss. A delivered message is:
+
+- **clarified** when the recipient's next message to the sender, sent within its next 5 calls
+  (`--clarify-window`), asks about it. That reply asks a question with "did you mean", "which one", "unclear" or
+  "clarify", or a question that names something from the message (a `#N`, a SHA, a path, a file, a flag, a tag or a
+  quoted span). A question that asks leave for the recipient's own next step, such as "May I add x?", does not count.
+- **corrected** when the sender's next message to the same recipient corrects or retracts something it sent:
+  "correction", "I was wrong", a `FIX` line, or `-> WITHDRAWN`. An updated instruction counts too.
+- **resent** when the sender sends almost the same text to the same recipient again (a similarity of 0.8 or more)
+  without a reply in between.
+
+The meter matches each message to its recipient by the `msg_id` that both transcripts log, else by its text, and
+matches a reply to its addressee by name. A failed send never counts. Delegation prompts are not checked. The exact
+rules are in the header of [tools/meter.mjs](tools/meter.mjs). Like the rest of the output, the signals are numbers
+only: the meter never prints message text or session names.
+
 ## Where it works
 
 | Surface | What loads |
