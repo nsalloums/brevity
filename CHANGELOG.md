@@ -3,6 +3,15 @@
 Every entry follows [RELEASING.md](RELEASING.md): a criticality level, why the release exists, what changed, the
 evidence, compatibility and upgrade steps. Versions follow semantic versioning read from the protocol's side.
 
+## [Unreleased]
+
+Changes waiting on `next` for the next release (see [RELEASING.md](RELEASING.md)).
+
+- **#6, normal.** The hook now also runs when a session is forked (`--fork-session`, `/fork` or `/branch`), which
+  Claude Code 2.1.214 and later reports as the source `fork`. A fork kept its parent's copy, so after a plugin
+  update, a dictionary edit or an arm change it went on with the old one. It now gets the current copy, as a resume
+  does. An unchanged copy is not added twice: Claude Code drops identical items on a fork too.
+
 ## [0.6.0] - 2026-10-10
 
 **Criticality:** normal. Two new surfaces measure on real work whether brevity pays: a meter that reads a team's own
