@@ -3,6 +3,13 @@
 Every entry follows [RELEASING.md](RELEASING.md): a criticality level, why the release exists, what changed, the
 evidence, compatibility and upgrade steps. Versions follow semantic versioning read from the protocol's side.
 
+## [Unreleased]
+
+Changes waiting on `next` for the next release (see [RELEASING.md](RELEASING.md)).
+
+- The README, eval/RESULTS.md and eval/RUBRIC.md link eval/METHOD.md, the reusable method, and RESULTS.md now says,
+  as METHOD.md does, that its holdout was not a sealed test (#27).
+
 ## [0.7.0] - 2026-10-11
 
 **Criticality:** normal. The cost model now prices the spec as Claude Code bills it, forked sessions get the current
