@@ -39,11 +39,13 @@ Measured on 268 real messages between Claude Code sessions (229 plus a 39-messag
 spec), with blind decoding and two independent audits:
 
 - **About 15% fewer tokens from one writing pass, which is how a session writes.** In a pilot on the same 268
-  messages, one pass saved 15.4% in total (median 11.8%), about 37 tokens per message, and kept every identifier.
-  It lost a decision-relevant fact in roughly 15 of every 100 messages (14.9; 95% CI 11.2-19.7).
+  messages, one pass saved 15.4% in total (median 11.8%), about 37 tokens per message, and kept every identifier
+  that the 0.7.0 identifier check covers. It lost a decision-relevant fact in roughly 15 of every 100 messages
+  (14.9; 95% CI 11.2-19.7).
 - **25% fewer tokens after nine rounds of auditing and repair** (63,861 -> 47,776; median per message 201 ->
-  160.5), with no known decision-relevant loss and every SHA, #N, file:line, number and quote kept (2,637
-  identifiers, 0 missing). Those encoders aimed at 50%, and every loss the audits confirmed was fixed. A session
+  160.5), with no known decision-relevant loss and every SHA, #N, file:line, number and quote kept that the 0.7.0
+  identifier check covers (2,637 identifiers, 0 missing; [#56](https://github.com/nsalloums/brevity/issues/56)
+  widened the check since). Those encoders aimed at 50%, and every loss the audits confirmed was fixed. A session
   writes each message once, with no audit.
 - **Terse English did about as well.** In the pilot, on the messages that no approach lost a fact in, brevity saved
   only about 3 tokens per message more than a 167-token instruction to write terse English with the same
@@ -72,9 +74,10 @@ it on any way of shortening agent messages.
 - **Keep what matters.** The writer must keep SHAs, numbers, file:line, owners, order, conditions, requests,
   questions, corrections and quotes. That is the writer's duty, not a guarantee: in the single-pass pilot, a
   decision-relevant fact was lost in about 15 of every 100 messages (see [Results](#results)).
-  [tools/idcheck.mjs](tools/idcheck.mjs) catches a missing SHA, #N, file:line, number of 10 or more, or «quoted»
-  text when it is run on the originals and their encodings. A session does not run it as it writes, and no tool
-  checks owners, conditions or requests. When the slots would lose nuance, free prose is allowed (`> ...`).
+  [tools/idcheck.mjs](tools/idcheck.mjs) catches a missing SHA, #N, file:line, number or diffstat of 10 or more (of
+  any size with `--small-numbers`), or «quoted» text when it is run on the originals and their encodings, and prints
+  the coverage it used. A session does not run it as it writes, and no tool checks owners, conditions or requests.
+  When the slots would lose nuance, free prose is allowed (`> ...`).
 
 ## When it pays off
 
@@ -401,8 +404,9 @@ node tools/idcheck.mjs messages.json encodings.json --verbose
 Build `messages.json` yourself, from messages you are allowed to use, as `[{"id": "m001", "text": "..."}]`, and
 write their encodings as `[{"id": "m001", "enc": "..."}]`. `measure.mjs` counts tokens before and after (with
 `@anthropic-ai/tokenizer` if it is installed, otherwise characters / 4). `idcheck.mjs` checks, deterministically,
-that every SHA, #N, file:line, number and «quote» of each original survives in its encoding. Keep real messages
-out of version control.
+that every SHA, #N, file:line, number of 10 or more and «quote» of each original survives in its encoding. The
+`coverage` line in its output names what it checked, its header lists the exceptions, and `--small-numbers` adds
+numbers below 10. Keep real messages out of version control.
 
 To check that each fact still arrives, and to compare approaches on the same messages, follow
 [eval/METHOD.md](eval/METHOD.md).
