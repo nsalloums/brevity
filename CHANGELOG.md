@@ -3,6 +3,14 @@
 Every entry follows [RELEASING.md](RELEASING.md): a criticality level, why the release exists, what changed, the
 evidence, compatibility and upgrade steps. Versions follow semantic versioning read from the protocol's side.
 
+## [Unreleased]
+
+Changes waiting on `next` for the next release (see [RELEASING.md](RELEASING.md)).
+
+- `tools/meter.mjs` flags delegation prompts as clarified, corrected or resent, in a table apart from the
+  SendMessage signals (#58), and `BREVITY_METER_TOKENIZER=chars/4` makes its tests pass with or without
+  `@anthropic-ai/tokenizer` installed (#60).
+
 ## [0.7.0] - 2026-10-11
 
 **Criticality:** normal. The cost model now prices the spec as Claude Code bills it, forked sessions get the current

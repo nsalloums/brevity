@@ -48,10 +48,12 @@
 //   the resumed line; the chain can stop at a parent that was never written, and what lies before that break is gone.
 //   Where lines carry no parentUuid, and when a prompt shrinks by more than 10% with no compaction or resume, a copy
 //   is gone if its end lies past the rebuilt prompt: the first call's prompt minus what was logged since the resume.
-// - Messages. Sent: SendMessage calls (a send whose result says success false failed) and delegation prompts
-//   (mcp__ccd_session__spawn_task). Received: messages from a peer (origin.kind "peer"), logged as user lines or, when
-//   they arrive while the session is busy, as queued_command attachments, and counted once per msg_id; and a
-//   delegation prompt that is a session's first message. Peer messages with handback true are subagent results, and
+// - Messages. Sent: SendMessage calls and delegation prompts (mcp__ccd_session__spawn_task); one whose result says
+//   success false, or is an error, failed. Received: messages from a peer (origin.kind "peer"), logged as user lines
+//   or, when they arrive while the session is busy, as queued_command attachments, and counted once per msg_id; and a
+//   delegation prompt that is a session's first message: the one sent before that session started, the newest if
+//   several were, and the original rather than a copy in a continued transcript. That session is the one the prompt
+//   started. Peer messages with handback true are subagent results, and
 //   Agent tool prompts go to subagents: both are counted apart. A message is written under the arm of the newest copy
 //   in the sender's context. Under lite and terse, every message is that arm's. Otherwise a message is brevity when a
 //   line after its first starts with a SPEC.md section 3 verb (DO, NO, REPLY, ASK, ASKn, An, WILL, DONE, IF, HOLD, GO,
@@ -89,14 +91,28 @@
 //     than this one, and it can be an update of an instruction rather than a mistake;
 //   - resent, when it repeats an earlier delivered message to the same recipient, with no message from that recipient
 //     in between: a similarity of 0.8 or more (Dice's coefficient over word pairs).
-//   A failed send is never one of them. Delegation prompts are not checked. A clarification about a message from a
-//   transcript that was not measured is not counted, since that message is not among the delivered ones either.
-//   These rules were tuned on brevity's own transcripts, and their precision there (on 2026-10-10, 4 of 5 flagged
-//   corrections real, the fifth only using the word; no clarification flagged) is in-sample, not a validation.
+//   A failed send is never one of them. A clarification about a message from a transcript that was not measured is
+//   not counted, since that message is not among the delivered ones either. These rules were tuned on brevity's own
+//   transcripts, and their precision there (on 2026-10-10, 4 of 5 flagged corrections real, the fifth only using the
+//   word; no clarification flagged) is in-sample, not a validation.
+// - Delegation signals, heuristics (issue #58), counted apart from the SendMessage ones so that those rates stay
+//   comparable. The same three flags apply to delivered delegation prompts, by the same rules for what asks about,
+//   corrects or repeats a message. The session a prompt started is also named by the prompt's title. A prompt is:
+//   - clarified, when one of the started session's first messages back to the sender asks about it: a message it
+//     sends the sender before the sender writes to it again. No call window applies, since a new session reads before
+//     it writes: on brevity's own transcripts (2026-10-11), its first message to the sender came 10 or more calls in;
+//   - corrected, when the sender's next delivered message to that session corrects or retracts something it sent;
+//   - resent, when it repeats a delivered prompt that the same transcript spawned before it (a similarity of 0.8 or
+//     more): the same delegation spawned again.
+//   Only a prompt whose session was measured (started) can be clarified or corrected. The rates are per 100 delivered
+//   prompts. These rules are untested on traffic: on brevity's own transcripts (2026-10-11), 19 prompts, all started,
+//   flagged 1 clarification and no correction or re-send.
 //
 // Token counts use @anthropic-ai/tokenizer, the legacy tokenizer behind eval/RESULTS.md's counts, when it is installed
 // where this file can import it: run npm i -D @anthropic-ai/tokenizer in the brevity checkout that holds this tool,
-// not in the project you measure. Otherwise they use chars/4. The output says which ran.
+// not in the project you measure. Otherwise they use chars/4. BREVITY_METER_TOKENIZER=chars/4 in the environment uses
+// chars/4 even when the tokenizer is installed; the tests set it, so their numbers do not depend on what is installed.
+// The output says which ran.
 
 import { createHash } from 'node:crypto';
 import { createReadStream, existsSync, readdirSync, realpathSync, writeFileSync } from 'node:fs';
@@ -140,7 +156,16 @@ const NAMED = [
   /--[a-z][\w-]*/g, /\bv\d+\.\d+\.\d+\b/g,
 ];
 
-export async function tokenizer() {
+const CHARS4 = (t) => Math.ceil(t.length / 4);
+
+// The tokenizer: @anthropic-ai/tokenizer when it can be imported, else chars/4, or chars/4 when the environment sets
+// BREVITY_METER_TOKENIZER=chars/4 (see the header).
+export async function tokenizer(env = process.env) {
+  const forced = env.BREVITY_METER_TOKENIZER;
+  if (forced !== undefined && forced !== '') {
+    if (forced !== 'chars/4') throw new Error('BREVITY_METER_TOKENIZER must be chars/4, or unset');
+    return { name: 'chars/4', forced: true, count: CHARS4 };
+  }
   try {
     const mod = await import('@anthropic-ai/tokenizer');
     const lib = mod.getTokenizer || mod.countTokens ? mod : mod.default;
@@ -151,7 +176,7 @@ export async function tokenizer() {
     }
     return { name: '@anthropic-ai/tokenizer', count: lib.countTokens };
   } catch {
-    return { name: 'chars/4', count: (t) => Math.ceil(t.length / 4) };
+    return { name: 'chars/4', count: CHARS4 };
   }
 }
 
@@ -539,6 +564,7 @@ class Transcript {
     item.callIndex = call.index;
     item.ord = call.ord;
     if (name === 'SendMessage') item.peer = [b.input?.to, b.input?.recipient];
+    else if (item.dir === 'delegation-sent') item.peer = [b.input?.title]; // the title names the session it starts
     if (item.counted) item.outputRate = this.ctx.prices.output;
     if (item.counted && call.loaded) item.outputRateLoaded = this.ctx.prices.output;
     this.tools.set(b.id, item);
@@ -590,7 +616,7 @@ class Transcript {
     if (origin.kind === 'peer') this.peer(origin, lineText(o), o);
     for (const b of blocks) {
       const item = b?.type === 'tool_result' ? this.tools.get(b.tool_use_id) : undefined;
-      if (item?.dir === 'sent' && (o.toolUseResult?.success === false || b.is_error === true)) item.failed = true;
+      if (SENT.includes(item?.dir) && (o.toolUseResult?.success === false || b.is_error === true)) item.failed = true;
       else if (item?.dir === 'sent' && o.toolUseResult?.msg_id !== undefined) item.msgId = o.toolUseResult.msg_id;
     }
     const plain = !o.isMeta && !o.isCompactSummary && !blocks.some((b) => b?.type === 'tool_result');
@@ -684,9 +710,32 @@ export async function meter(sources, { count, prices = PRICES, ratios, ratio, si
       records.push(r);
     }
   }
+  linkDelegations(records);
   signals(records, clarifyWindow);
   settle(records, ratios);
   return records;
+}
+
+// The delegation prompt that started each session (see the header): its first message, when that equals a delivered
+// prompt from another transcript. Of several, the original rather than a copy, and the newest sent before the session
+// started (else the newest).
+function linkDelegations(records) {
+  const byHash = new Map();
+  for (const r of records) {
+    for (const m of r.messages) if (m.dir === 'delegation-sent' && !m.failed) byHash.set(m.hash, [...(byHash.get(m.hash) ?? []), { m, r }]);
+  }
+  const time = (ts) => (ts ? Date.parse(ts) : NaN);
+  for (const r of records) {
+    const f = r.first;
+    const hit = f?.candidates.find((c) => byHash.has(c.hash));
+    if (!hit) continue;
+    const all = byHash.get(hit.hash).filter((x) => x.r !== r);
+    const owned = all.filter((x) => x.m.owned);
+    const pool = (owned.length ? owned : all).sort((a, b) => (time(a.m.ts) || 0) - (time(b.m.ts) || 0));
+    const before = pool.filter((x) => !(time(x.m.ts) > time(f.ts)));
+    const d = (before.length ? before : pool).at(-1);
+    if (d) Object.assign(f, { hit, delegation: d.m, delegator: d.r });
+  }
 }
 
 // The quality signals of every delivered SendMessage message (see the header): clarified, corrected and resent.
@@ -767,6 +816,55 @@ function signals(records, window) {
       }
     });
   }
+  delegationSignals(records, { names, senderOf, original, receiver: (m) => at(receiverOf, m.msgId) });
+}
+
+// The quality signals of every delivered delegation prompt (see the header), kept apart from the SendMessage ones.
+// `names`, `senderOf`, `original` and `receiver` are the SendMessage signals' matching.
+function delegationSignals(records, { names, senderOf, original, receiver }) {
+  const started = new Map(); // prompt to the transcripts of the session it started, with its continuations and forks
+  const ownedByHash = new Map();
+  for (const r of records) {
+    const d = r.first?.delegation;
+    if (d) started.set(d, [...(started.get(d) ?? []), r]);
+    for (const m of r.messages) {
+      if (m.dir !== 'delegation-sent') continue;
+      m.started = m.clarified = m.corrected = m.resent = false;
+      if (m.owned && !m.failed) ownedByHash.set(m.hash, [...(ownedByHash.get(m.hash) ?? []), m]);
+    }
+  }
+  for (const d of started.keys()) d.started = true;
+  // A copy of a prompt in a transcript that continues or forks its sender stands for the original.
+  const originalOf = (d) => {
+    if (d.owned) return d;
+    const all = ownedByHash.get(d.hash) ?? [];
+    return all.length === 1 ? all[0] : d;
+  };
+  // Whether a delivered message goes to one of the transcripts `rs`, or to a session with one of `more` names.
+  const goesTo = (n, rs, more = []) => rs.includes(receiver(n)) || samePeer(n.peer, [...rs.flatMap((x) => names.get(x)), ...more]);
+  const delivered = (m) => SENT.includes(m.dir) && !m.failed;
+  for (const r of records) {
+    // Clarified: the started session's messages to the sender, until the sender writes to it again, ask about the prompt.
+    const d = r.first?.delegation;
+    if (d) {
+      const C = r.first.delegator;
+      for (const m of r.messages) {
+        if (m.dir === 'received' && (senderOf.get(original(m)) === C || samePeer(m.peer, names.get(C)))) break;
+        if (m.dir !== 'sent' || !delivered(m) || !goesTo(m, [C])) continue;
+        if (m.owned && isClarification(m.text, d.text)) { d.clarified = true; break; }
+      }
+    }
+    const ms = r.messages.filter((m) => m.dir === 'sent' || m.dir === 'delegation-sent');
+    ms.forEach((n, j) => {
+      if (n.dir !== 'delegation-sent' || !delivered(n)) return;
+      const o = originalOf(n);
+      // Corrected: the sender's next delivered message to the session the prompt started.
+      const next = ms.slice(j + 1).find((m) => m.dir === 'sent' && delivered(m) && goesTo(m, started.get(o) ?? [], n.peer));
+      if (next && isCorrection(next.text)) o.corrected = true;
+      // Resent: it repeats a prompt that this transcript spawned before it.
+      if (ms.slice(0, j).some((m) => m.dir === 'delegation-sent' && delivered(m) && similarity(m.text, n.text) >= RESEND_SIMILARITY)) n.resent = true;
+    });
+  }
 }
 
 const SENT = ['sent', 'delegation-sent'];
@@ -778,17 +876,15 @@ const compressed = (m) => m.style !== 'prose' && m.arm !== 'off';
 
 // Each message's style (brevity, lite, terse or prose), ratio and estimated saving. A received message takes the arm
 // and style of the sent message with the same text, and a session's first message is a received delegation prompt
-// when it equals one that a session sent.
+// when it is the prompt that started the session (see linkDelegations).
 function settle(records, ratios) {
   const style = (m) => (m.arm === 'lite' || m.arm === 'terse' ? m.arm : m.brevity ? 'brevity' : 'prose');
   const sent = new Map();
-  const delegated = new Map();
   for (const r of records) {
     for (const m of r.messages) {
       if (!WRITTEN.includes(m.dir)) continue;
       m.style = style(m);
       if (m.dir === 'sent') sent.set(m.hash, m);
-      if (m.dir === 'delegation-sent') delegated.set(m.hash, m);
     }
   }
   for (const r of records) {
@@ -799,11 +895,10 @@ function settle(records, ratios) {
       m.style = from?.style ?? style(m);
     }
     const f = r.first;
-    const hit = f?.candidates.find((c) => delegated.has(c.hash));
-    if (hit) {
-      const from = delegated.get(hit.hash);
+    if (f?.delegation) {
+      const from = f.delegation;
       r.messages.push({
-        dir: 'delegation-received', owned: f.owned, counted: f.counted, brevity: isBrevity(hit.text), arm: from.arm,
+        dir: 'delegation-received', owned: f.owned, counted: f.counted, brevity: isBrevity(f.hit.text), arm: from.arm,
         style: from.style, tokens: from.tokens, failed: false, rate: f.rate, outputRate: 0, rateLoaded: f.rateLoaded,
         outputRateLoaded: 0, callIndex: f.callIndex, ts: f.ts,
       });
@@ -828,17 +923,18 @@ function tally(r) {
   const received = of(RECEIVED);
   const styled = (list, style) => list.filter((m) => m.style === style).length;
   const deliveries = of(['sent'], delivered);
+  const prompts = of(['delegation-sent'], delivered);
   return {
     sentBrevity: styled(sent, 'brevity'),
     sentLite: styled(sent, 'lite'),
     sentTerse: styled(sent, 'terse'),
     sentProse: styled(sent, 'prose'),
-    failed: of(['sent'], (m) => m.failed).length,
+    failed: of(SENT, (m) => m.failed).length,
     deliveredBrevity: styled(deliveries, 'brevity'),
     deliveredLite: styled(deliveries, 'lite'),
     deliveredTerse: styled(deliveries, 'terse'),
     deliveredProse: styled(deliveries, 'prose'),
-    delegations: of(['delegation-sent']).length,
+    delegations: prompts.length,
     receivedBrevity: styled(received, 'brevity'),
     receivedLite: styled(received, 'lite'),
     receivedTerse: styled(received, 'terse'),
@@ -852,12 +948,23 @@ function tally(r) {
     clarified: deliveries.filter((m) => m.clarified).length,
     corrected: deliveries.filter((m) => m.corrected).length,
     resent: deliveries.filter((m) => m.resent).length,
+    // The delegation signals, apart: of the delivered delegation prompts, how many started a measured session, and
+    // how many were clarified, corrected or resent.
+    delegationsStarted: prompts.filter((m) => m.started).length,
+    delegationsClarified: prompts.filter((m) => m.clarified).length,
+    delegationsCorrected: prompts.filter((m) => m.corrected).length,
+    delegationsResent: prompts.filter((m) => m.resent).length,
   };
 }
 
 const SIGNALS = ['clarified', 'corrected', 'resent'];
+// The tally key of each delegation signal.
+const DELEGATION_SIGNALS = { clarified: 'delegationsClarified', corrected: 'delegationsCorrected', resent: 'delegationsResent' };
 // Each signal per 100 SendMessage deliveries, or null without any.
 const per100 = (x) => (x.delivered ? Object.fromEntries(SIGNALS.map((k) => [k, (100 * x[k]) / x.delivered])) : null);
+// Each delegation signal per 100 delivered delegation prompts, or null without any.
+const delegationPer100 = (x) => (x.delegations
+  ? Object.fromEntries(SIGNALS.map((k) => [k, (100 * x[DELEGATION_SIGNALS[k]]) / x.delegations])) : null);
 
 function summarize(records) {
   const sum = (key) => records.reduce((a, r) => a + r[key], 0);
@@ -874,6 +981,7 @@ function summarize(records) {
   const b = out.billLoaded;
   out.shareOfLoadedBill = b ? { specCost: out.specCostLoaded / b, saving: out.savingLoaded / b, net: out.netLoaded / b } : null;
   out.per100 = per100({ delivered: out.delivered ?? 0, clarified: out.clarified, corrected: out.corrected, resent: out.resent });
+  out.delegationPer100 = delegationPer100(out);
   return out;
 }
 
@@ -887,6 +995,7 @@ export function perArm(sessions, ratios) {
     const a = (arms[r.arm] ??= {
       ratio: r.arm in ratios ? ratios[r.arm] : null, sessions: [], calls: 0, bill: 0, loadCost: 0, sent: 0, received: 0,
       compressed: 0, saving: 0, net: 0, delivered: 0, clarified: 0, corrected: 0, resent: 0,
+      delegations: 0, delegationsStarted: 0, delegationsClarified: 0, delegationsCorrected: 0, delegationsResent: 0,
     });
     a.sessions.push(r.id);
     a.calls += r.calls;
@@ -897,11 +1006,12 @@ export function perArm(sessions, ratios) {
     a.compressed += r.messages.filter((m) => m.counted && !m.failed && [...SENT, ...RECEIVED].includes(m.dir) && compressed(m)).length;
     a.saving += r.saving;
     a.net += r.net;
-    for (const k of ['delivered', ...SIGNALS]) a[k] += t[k];
+    for (const k of ['delivered', ...SIGNALS, 'delegations', 'delegationsStarted', ...Object.values(DELEGATION_SIGNALS)]) a[k] += t[k];
   }
   for (const a of Object.values(arms)) {
     a.shareOfBill = a.bill ? { loadCost: a.loadCost / a.bill, saving: a.saving / a.bill, net: a.net / a.bill } : null;
     a.per100 = per100(a);
+    a.delegationPer100 = delegationPer100(a);
   }
   return arms;
 }
@@ -953,9 +1063,9 @@ function parseArgs(argv) {
   return opts;
 }
 
-export async function run(argv, { cwd = process.cwd(), home = process.env.CLAUDE_CONFIG_DIR || join(homedir(), '.claude'), count } = {}) {
+export async function run(argv, { cwd = process.cwd(), home = process.env.CLAUDE_CONFIG_DIR || join(homedir(), '.claude'), count, env = process.env } = {}) {
   const o = parseArgs(argv);
-  const tok = count ? { name: 'given', count } : await tokenizer();
+  const tok = count ? { name: 'given', count } : await tokenizer(env);
   const prices = {
     input: o.input ?? PRICES.input, output: o.output ?? PRICES.output,
     write5m: o['write-5m'] ?? PRICES.write5m, write1h: o['write-1h'] ?? PRICES.write1h, read: o.read,
@@ -994,6 +1104,7 @@ export async function run(argv, { cwd = process.cwd(), home = process.env.CLAUDE
   for (const r of team) for (const [m, n] of Object.entries(r.models)) models[m] = (models[m] ?? 0) + n;
   const result = {
     tokenizer: tok.name,
+    tokenizerForced: !!tok.forced,
     prices: { ...prices, read: prices.read ?? 'by model', readByModel: Object.fromEntries(Object.keys(models).map((m) => [m, readPrice(m, prices)])) },
     models,
     // The brevity ratio, or the override: the key earlier versions wrote.
@@ -1057,7 +1168,7 @@ export function render(r) {
   out.push('brevity meter: what brevity cost and saved in these Claude Code sessions, in input-token equivalents');
   out.push(`prices: input ${p.input}, output ${p.output}, cache write ${p.write5m} (5-minute) or ${p.write1h} (1-hour), `
     + `cache read ${typeof p.read === 'number' ? `${p.read} (--read)` : reads || 'by model'}`);
-  out.push(`tokenizer: ${r.tokenizer}${r.tokenizer === 'chars/4'
+  out.push(`tokenizer: ${r.tokenizer}${r.tokenizerForced ? ' (BREVITY_METER_TOKENIZER=chars/4)' : r.tokenizer === 'chars/4'
     ? ' (for the legacy counts, run npm i -D @anthropic-ai/tokenizer in the brevity checkout that holds this tool)' : ''}`);
   const win = r.window.since || r.window.until ? `calls from ${r.window.since ?? 'the start'} to ${r.window.until ?? 'the end'}` : 'all calls';
   out.push(`read: ${plural(r.transcripts.sessions, 'session transcript')} and ${plural(r.transcripts.subagents, 'subagent transcript')} `
@@ -1121,6 +1232,21 @@ export function render(r) {
       + 'about it; corrected = the sender\'s next message to the same recipient corrects or retracts it; resent = it repeats an '
       + `earlier message to the same recipient (similarity >= ${s.resendSimilarity}) with no reply in between. The rules are in the `
       + 'header of tools/meter.mjs; they miss some cases and flag others wrongly.');
+
+    out.push('', 'delegation signals, heuristics, apart from the SendMessage ones: delegation prompts (spawn_task) that may not '
+      + 'have been understood, per arm and for the team (n and per 100 prompts):');
+    const drate = (x, key) => (x.delegationPer100 ? x.delegationPer100[key].toFixed(1) : '-');
+    const delegationRow = (name, x) => [name, fmt(x.delegations), fmt(x.delegationsStarted),
+      ...SIGNALS.flatMap((k) => [fmt(x[DELEGATION_SIGNALS[k]]), drate(x, k)])];
+    out.push(table([
+      ['arm', 'prompts', 'started', 'clarified', '/100', 'corrected', '/100', 'resent', '/100'],
+      ...Object.entries(r.team.arms).map(([arm, a]) => delegationRow(arm, a)),
+      delegationRow('team', t),
+    ]));
+    out.push('started = the session the prompt started was measured; only those can be clarified or corrected. '
+      + 'clarified = that session\'s messages to the sender, before the sender writes to it again, ask about the prompt (no call '
+      + 'window: a new session reads before it writes); corrected = the sender\'s next message to that session corrects or '
+      + `retracts something; resent = it repeats a prompt the sender spawned before (similarity >= ${s.resendSimilarity}).`);
   }
   out.push('', r.duplicates.length ? 'duplicated copies (two or more in one context, issue #39):' : 'duplicated copies: none');
   for (const d of r.duplicates) {
