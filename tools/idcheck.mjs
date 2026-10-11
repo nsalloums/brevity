@@ -7,9 +7,9 @@
 // Checked tokens, extracted from the original:
 //   commit SHAs   7-40 hex chars with at least one digit and one letter; the encoding must contain
 //                 a prefix of length >= min(9, original length) (or the original's full form)
-//   #N refs       PR / issue numbers; also github.com/<o>/<r>/(pull|issues)/N URLs
+//   #N refs       PR / issue numbers, including one-digit refs; also GitHub issue/PR URLs
 //   file:line     name.ext:123 or name.ext:123-456 -> the line numbers must appear
-//   numbers       every integer >= 10 and every +N/-N diffstat (a 20xx year counts as present when
+//   numbers       every integer and every +N/-N diffstat (a 20xx year counts as present when
 //                 the encoding carries an MM-DD date, since the spec lets the current year be implied)
 //   quoted UI     text inside «...» must appear verbatim (either «...» or "..."); a quote written
 //                 with edit markup ({old>new}, {+ins}, {-del}) counts for both its old and new text
@@ -59,15 +59,15 @@ function tokens(text) {
     if (/[0-9]/.test(m[0]) && /[a-f]/.test(m[0])) { shas.add(m[0]); found.push({ kind: 'sha', v: m[0] }); }
   }
   const refs = new Set();
-  for (const m of t.matchAll(/github\.com\/[\w.-]+\/[\w.-]+\/(?:pull|issues)\/(\d+)/g)) refs.add(m[1]);
-  for (const m of t.matchAll(/#(\d{2,})/g)) refs.add(m[1]);
+  for (const m of t.matchAll(/github\.com\/[\w.-]+\/[\w.-]+\/(?:pull|issues)\/(\d+)/gi)) refs.add(m[1]);
+  for (const m of t.matchAll(/#(\d+)/g)) refs.add(m[1]);
   for (const r of refs) found.push({ kind: 'ref', v: r });
-  for (const m of t.matchAll(/[\w.-]+\.(?:tsx?|jsx?|mjs|md|sql|json|ya?ml|css):~?(\d+)(?:-(\d+))?/g)) {
+  for (const m of t.matchAll(/[\w./-]+\.[a-z0-9_-]+:~?(\d+)(?:-(\d+))?/gi)) {
     found.push({ kind: 'line', v: m[1] });
     if (m[2]) found.push({ kind: 'line', v: m[2] });
   }
   for (const m of t.matchAll(/«([^»]{1,120})»/g)) found.push({ kind: 'quote', v: m[1] });
-  for (const m of t.matchAll(/(?<![\w#.:/-])([+-]?\d{2,})(?![\w:/.-]*[a-f])/g)) {
+  for (const m of t.matchAll(/(?<![\w#.:/-])([+-]?\d+)(?![\w:/.-]*[a-f])/gi)) {
     const v = m[1];
     const bare = v.replace(/^[+-]/, '');
     if ([...shas].some((s) => s.includes(bare)) || refs.has(bare)) continue;

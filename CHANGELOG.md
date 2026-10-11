@@ -7,6 +7,9 @@ evidence, compatibility and upgrade steps. Versions follow semantic versioning r
 
 Changes waiting on `next` for the next release (see [RELEASING.md](RELEASING.md)).
 
+- **#56, normal.** `tools/idcheck.mjs` now checks one-digit issue/PR references, small integers and diffstats,
+  and `file:line` references across source-language extensions such as `.py` and `.go`, so the coverage it reports
+  includes identifiers that previously went unexamined.
 - **#6, normal.** The hook now also runs when a session is forked (`--fork-session`, `/fork` or `/branch`), which
   Claude Code 2.1.214 and later reports as the source `fork`. A fork kept its parent's copy, so after a plugin
   update, a dictionary edit or an arm change it went on with the old one. It now gets the current copy, as a resume
