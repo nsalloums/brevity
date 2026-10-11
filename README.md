@@ -198,9 +198,9 @@ write brevity without being asked.
 The hook needs **Node.js 16.6 or later** on your `PATH`. The skill needs nothing.
 
 The hook does nothing until a project opts in: create a `.brevity/` folder at the project root (empty is fine), or
-set `BREVITY_ALWAYS=1`. Then, on startup, resume, `/clear` and compaction, it injects `SPEC.md`, then the nearest
-`.brevity/DICT.md` and `.brevity/DICT.local.md` found from the session's directory upwards. Git worktrees nested
-inside the main clone therefore pick up the main clone's dictionary. `BREVITY_DICT` can name extra files. On a
+set `BREVITY_ALWAYS=1`. Then, on startup, resume, fork, `/clear` and compaction, it injects `SPEC.md`, then the
+nearest `.brevity/DICT.md` and `.brevity/DICT.local.md` found from the session's directory upwards. Git worktrees
+nested inside the main clone therefore pick up the main clone's dictionary. `BREVITY_DICT` can name extra files. On a
 resume, the hook injects the current copy, and Claude Code itself keeps only the injected items whose text changed
 (observed on real resumes, not documented by Claude Code). A second copy therefore appears only when the copy's
 content changed, such as after a plugin update or a dictionary edit, which is what the session should load.
