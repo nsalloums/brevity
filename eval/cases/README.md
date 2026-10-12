@@ -6,8 +6,8 @@ asks for that comparison. The cases follow the README's "Try it" prompts, and ev
 
 | Case | What it checks |
 |---|---|
-| `encode-prose-message` | A prose message becomes a plain line 1 and verb lines that keep #41, the SHA, the branch, the file, the prohibition and the CI condition. |
-| `decode-brevity-message` | A message that uses only spec notation decodes to plain language, with every condition and request. |
+| `encode-prose-message` | A prose message becomes a plain one-sentence line 1 and verb lines that keep #41, the SHA, the branch, the file, the prohibition and the CI condition. |
+| `decode-brevity-message` | A message that uses only spec notation decodes to plain language, with every condition and request, and without reading `(mine)` as the reader's or CLEAN as "up to date". |
 | `ignores-coding-request` | An ordinary coding request does not load the skill, in either arm, and gets no reply in brevity. |
 | `opted-in-session` | In a project with `.brevity/DICT.md` copied from [DICT.template.md](../../DICT.template.md), the session hook loads the dictionary, and Claude expands `R.ready` without opening a file. |
 
@@ -39,6 +39,18 @@ claude plugin eval --eval-dir eval/cases --scaffold
   indicators only and do not count toward the score. `skill-not-used` sets `arm: both`, so it counts in both arms.
 - brevity is meant to be readable without the spec, so Claude may decode `decode-brevity-message` well without the
   plugin, and its `Δ` can be small.
+- One grader is an `llm` grader, scored by a judge model: `plain-line-1` in `encode-prose-message`. A judge's
+  verdicts vary from run to run, and two judges can disagree on the same reply. Every other grader is a regex or a
+  tool check, which gives the same verdict on the same reply whatever the judge, so a verdict that wording can decide
+  is a regex: the shape of the encoded line 1 (`line-1-one-sentence`); in `decode-brevity-message`, every condition
+  (`keeps-conditions`) and the two misreadings seen in no-plugin decodes, `(mine)` read as the reader's and CLEAN
+  read as "up to date" (`mine-is-senders`, `clean-not-up-to-date`); and in `opted-in-session`, the six parts of
+  `R.ready` (`r-ready-in-full`) and a changed part, such as the sender merging, another merge command or CLEAN read
+  as "up to date" (`no-changed-part`). See [issue #69](https://github.com/nsalloums/brevity/issues/69).
+- The default judge is Haiku (in Claude Code 2.1.286). Pass `--judge-model` to use another, for example
+  `--judge-model sonnet`. The scores published in [issue #8](https://github.com/nsalloums/brevity/issues/8) and
+  [#69](https://github.com/nsalloums/brevity/issues/69) used the default judge, with a second set under
+  `--judge-model sonnet`. Say which judge you used when you report scores.
 - The hook looks for a `.brevity/` folder from the run's temporary workspace upwards. If a `.brevity/` folder sits
   above that workspace (on Windows the temporary directory is usually inside your home folder), every case is opted
   in, and the spec loads into all their runs with the plugin.
