@@ -16,8 +16,13 @@
 // then is resumed 90 minutes later under off (the marker alone, 26 tokens) with the lite copy still in context, and
 // sends M4, which has a verb line. "plain" loads nothing.
 //
-// tools/fixtures/meter/skill holds "flip", the switch session with two changes (issue #79): the plugin's skill listing
-// (a 30-token entry) comes right after the lite copy and stays in context past the resume, and M4 corrects M3.
+// tools/fixtures/meter/skill holds "flip", the switch session with these changes (issue #79): the plugin's skill
+// listing (a 30-token entry) comes right after the lite copy and stays in context past the resume; call 1 also prompts
+// a subagent (14 tokens) and makes a send that fails (11 tokens); a subagent's result with a verb line (18 tokens)
+// arrives after the resume, before call 3; and M4 corrects M3. tools/fixtures/meter/source holds "a" (lite) and "b"
+// (terse), which send "r" (no arm) the same 14-token text; r receives a's copy, then b's, each logged with its msg_id.
+// tools/fixtures/meter/stale holds "flop", switch's calls with a terse copy (101 tokens) instead of the lite one, and no
+// messages.
 //
 // tools/fixtures/meter/quality holds the quality signals. "lead" (terse) sends "dev" (lite) Q1, which dev asks about
 // with "Did you mean"; Q3, whose `tests/cart.test.mjs` dev names in a question; Q5, answered with a question that
@@ -471,6 +476,15 @@ const perArmAddsUp = (r) => {
     assert.equal(r.team.arms[arm].sessions.includes(s.id), s.callArms.includes(arm), `${s.id} under ${arm}`);
   }
   assert.equal(t.multiArmSessions, r.team.sessions.filter((s) => s.callArms.length > 1).length);
+  // Each row's saving is that of the messages written under its arm (none: no arm), counted or not. A row with a cost
+  // or a saving has a share base, which holds at least the arm's own calls; every call is in some base.
+  const ms = r.team.sessions.flatMap((s) => s.messages);
+  for (const [arm, x] of Object.entries(r.team.arms)) {
+    close(x.saving, ms.filter((m) => (m.arm ?? 'none') === arm).reduce((a, m) => a + m.saving, 0));
+    if (x.loadCost || x.saving) assert.ok(x.shareOfBill, `${arm} has shares`);
+    assert.ok(x.shareBase >= x.bill - 1e-6 && x.shareBase <= t.bill + 1e-6, `${arm}'s share base`);
+  }
+  assert.ok(sum('shareBase') >= t.bill - 1e-6);
 };
 
 test('the per-arm summary goes by the arm in effect: each call, copy and message under its own arm (issue #79)', async () => {
@@ -494,10 +508,14 @@ test('the per-arm summary goes by the arm in effect: each call, copy and message
   close(a.lite.saving, saved(25, 0.087) * (5 + 2) + saved(25, 0.087) * (2 + 0.05) + saved(18, 0.087) * (5 + 2 + 2 + 0.05));
   close(a.terse.saving, saved(16, 0.102) * (5 + 2));
   assert.equal(a.off.saving, 0, 'M4, written under off, saves nothing');
+  // The share base: the calls under the arm, and those that carried its copies or messages. For lite, switch's last two
+  // calls also carry the lite copy and M3, and terse's calls 2 and 3 (555.75 + 461) carry M1.
+  close(a.lite.shareBase, 2810.25 + 2760.25 + 3170.25 + 555.75 + 461);
+  assert.deepEqual([a.terse.shareBase, a.off.shareBase, a.none.shareBase], [3221.75, 3170.25, 1255]);
   for (const x of Object.values(a)) {
     close(x.net, x.saving - x.loadCost);
-    close(x.shareOfBill.loadCost, x.loadCost / x.bill);
-    close(x.shareOfBill.net, x.net / x.bill);
+    close(x.shareOfBill.loadCost, x.loadCost / x.shareBase);
+    close(x.shareOfBill.net, x.net / x.shareBase);
   }
   perArmAddsUp(r);
   const text = render(r);
@@ -505,9 +523,21 @@ test('the per-arm summary goes by the arm in effect: each call, copy and message
   assert.match(text, /^terse +terse +3 +3,222 +1 +168 +0\/0\/1\/0 +0\/1\/0\/0 /m);
   assert.match(text, /^arm = the arm of the last copy the session's counted calls carried, else of its last copy/m);
   assert.match(text, /^per arm, by the arm in effect: each call under the newest copy in its context, each copy under its own arm, /m);
-  assert.match(text, /^lite +0\.087 +2 +4 +5,571 +615 +11\.04% +2 +1 +37 +0\.67% +-578 +-10\.37%$/m);
-  assert.match(text, /^off +0 +1 +2 +3,170 +53 +1\.68% +1 +0 +0 +0\.00% +-53 +-1\.68%$/m);
-  assert.match(text, /^none +- +1 +1 +1,255 +0 /m);
+  assert.match(text, /^arm +ratio +sessions +calls +bill +share base +load cost +load % /m);
+  assert.match(text, /^lite +0\.087 +2 +4 +5,571 +9,758 +615 +6\.30% +2 +1 +37 +0\.38% +-578 +-5\.92%$/m);
+  assert.match(text, /^off +0 +1 +2 +3,170 +3,170 +53 +1\.68% +1 +0 +0 +0\.00% +-53 +-1\.68%$/m);
+  assert.match(text, /^none +- +1 +1 +1,255 +1,255 +0 /m);
+  assert.match(text, /^share base = the bill of the calls that ran under the arm or carried one of its copies or messages; each % divides by it\. A call that carried more than one arm is in each base, so the bases and shares do not add up across arms\.$/m);
+  // From switch's resume on, only its calls under off and plain's count. The lite copy and M3 still ride along: lite
+  // has no call and no session, but a cost, a saving and a share base, so shares.
+  const cut = await arms('--since', '2026-02-02T12:00:00Z');
+  const lite = cut.team.arms.lite;
+  assert.deepEqual([lite.sessions, lite.calls, lite.bill, lite.shareBase], [[], 0, 0, 3170.25]);
+  close(lite.loadCost, 100 * (2 + 0.05));
+  close(lite.saving, saved(18, 0.087) * (2 + 0.05));
+  close(lite.shareOfBill.loadCost, 205 / 3170.25);
+  assert.match(render(cut), /^lite +0\.087 +0 +0 +0 +3,170 +205 +6\.47% +0 +0 +4 +0\.11% +-201 +-6\.36%$/m);
+  perArmAddsUp(cut);
   assert.match(text, /^sessions = the sessions with a call under the arm: 1 session of 4 had calls under more than one arm and count under each \(switch: lite, off\)\.$/m);
   const byArm = r.team.sentByArm;
   assert.deepEqual(Object.entries(byArm).map(([arm, x]) => [arm, x.sent, x.sentTokens]),
@@ -531,29 +561,79 @@ test('the per-arm summary goes by the arm in effect: each call, copy and message
   assert.match(one, /^sessions = the sessions with a call under the arm: no session had calls under more than one arm\.$/m);
 });
 
-test('the skill entry\'s cost goes to the arm of each call that bills it; a signal to the arm of its message', async () => {
+test('the skill entry\'s cost goes to the arm of each call that bills it; a message and its signals to its own arm', async () => {
   const r = await run(['--project', join(here, 'fixtures', 'meter', 'skill')], { count, cwd: dir });
   const flip = session(r, 'flip');
   assert.deepEqual(flip.callArms, ['lite', 'off']);
   // The skill entry is written and read under lite, then written again after the resume and read under off.
   close(flip.skillCost, 30 * (2 + 0.05 + 2 + 0.05));
   const a = r.team.arms;
+  assert.deepEqual(Object.keys(a), ['lite', 'off', 'none']);
   close(a.lite.loadCost, 100 * (2 + 0.05 + 2 + 0.05) + 30 * (2 + 0.05));
   close(a.off.loadCost, 26 * (2 + 0.05) + 30 * (2 + 0.05));
   assert.deepEqual([flip.byArm.lite.calls, flip.byArm.off.calls], [2, 2]);
-  // M4, sent under off, corrects M3, sent under lite: the correction counts under lite.
-  assert.deepEqual(messages(flip, 'sent').map((m) => [m.arm, m.corrected]), [['lite', true], ['off', false]]);
-  assert.deepEqual([a.lite.delivered, a.lite.corrected, a.off.delivered, a.off.corrected], [1, 1, 1, 0]);
+  // M4, sent under off, corrects M3, sent under lite: the correction counts under lite. The failed send is not one.
+  assert.deepEqual(messages(flip, 'sent').map((m) => [m.arm, m.failed, m.corrected]), [['lite', false, true], ['lite', true, false], ['off', false, false]]);
+  assert.deepEqual([a.lite.sent, a.lite.delivered, a.lite.corrected, a.off.delivered, a.off.corrected], [1, 1, 1, 1, 0]);
   assert.deepEqual(a.lite.per100, { clarified: 0, corrected: 100, resent: 0 });
+  // Messages that are neither sent nor received save under their own arm too: the subagent prompt and the failed send,
+  // written under lite and carried like M3 (output, written at calls 2 and 3, read at 4), and the subagent's result,
+  // which has no arm (written at call 3, read at 4).
+  assert.deepEqual(flip.messages.map((m) => [m.dir, m.arm, m.style]), [['sent', 'lite', 'lite'], ['subagent-prompt', 'lite', 'lite'],
+    ['sent', 'lite', 'lite'], ['handback', null, 'brevity'], ['sent', 'off', 'brevity']]);
+  close(a.lite.saving, (saved(18, 0.087) + saved(14, 0.087) + saved(11, 0.087)) * (5 + 2 + 2 + 0.05));
+  close(a.none.saving, saved(18, 0.154) * (2 + 0.05));
+  assert.deepEqual([a.none.sessions, a.none.calls, a.none.sent, a.none.received], [[], 0, 0, 0]);
+  // Calls 3 and 4 run under off and carry the lite copy, M3 and the subagent's result: they are in all three bases.
+  assert.deepEqual([a.lite.shareBase, a.off.shareBase, a.none.shareBase], [2760.25 + 3170.25, 3170.25, 3170.25]);
   perArmAddsUp(r);
 });
 
-test('the per-arm rows add up to the team on every fixture, with or without a window', async () => {
-  const fixtures = ['team', 'late', 'arms', 'skill', 'quality', 'linking', 'delegation', 'ends'];
+test('a received message takes the arm of the send its msg_id names, though another arm sent the same text', async () => {
+  const r = await run(['--project', join(here, 'fixtures', 'meter', 'source')], { count, cwd: dir });
+  assert.deepEqual(messages(session(r, 'r'), 'received').map((m) => [m.arm, m.style, m.tokens]), [['lite', 'lite', 14], ['terse', 'terse', 14]]);
+  const a = r.team.arms;
+  assert.deepEqual(Object.entries(a).map(([arm, x]) => [arm, x.sessions, x.sent, x.received]),
+    [['lite', ['a'], 1, 1], ['terse', ['b'], 1, 1], ['none', ['r'], 0, 0]]);
+  // r writes a's copy at its first call and reads it at the next two; b's arrives after call 1.
+  close(a.lite.saving, saved(14, 0.087) * (5 + 2 + 2 + 0.05 + 0.05));
+  close(a.terse.saving, saved(14, 0.102) * (5 + 2 + 2 + 0.05));
+  perArmAddsUp(r);
+});
+
+test('a copy that outlives its arm puts the calls that carry it in its arm\'s share base', async () => {
+  const r = await run(['--project', join(here, 'fixtures', 'meter', 'stale')], { count, cwd: dir });
+  const a = r.team.arms;
+  // The terse copy is written and read under terse, then written again and read under off.
+  close(a.terse.loadCost, 101 * (2 + 0.05 + 2 + 0.05));
+  assert.deepEqual([a.terse.calls, a.terse.bill, a.terse.shareBase], [2, 2760.25, 2760.25 + 3170.25]);
+  assert.deepEqual([a.off.calls, a.off.bill, a.off.shareBase], [2, 3170.25, 3170.25]);
+  close(a.terse.shareOfBill.loadCost, a.terse.loadCost / (2760.25 + 3170.25));
+  perArmAddsUp(r);
+});
+
+// The times of a fixture's calls, each a place to cut a window.
+const callTimes = (name) => {
+  const files = transcripts([join(here, 'fixtures', 'meter', name)]).map((x) => x.file);
+  const times = files.flatMap((f) => readFileSync(f, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l))
+    .filter((o) => o.type === 'assistant' && o.message?.model !== '<synthetic>').map((o) => o.timestamp));
+  return [...new Set(times)].sort();
+};
+
+test('the per-arm rows add up to the team on every fixture, whole and cut at each of its calls', async () => {
+  const fixtures = ['team', 'late', 'arms', 'skill', 'source', 'stale', 'quality', 'linking', 'delegation', 'ends'];
   for (const name of fixtures) {
-    for (const args of [[], ['--saving-ratio', '0.2'], ['--since', '2026-01-05T11:00:00Z'], ['--until', '2026-01-05T12:30:00Z']]) {
+    const times = callTimes(name);
+    assert.ok(times.length > 1, name);
+    const windows = [[], ['--saving-ratio', '0.2'], ...times.flatMap((t) => [['--since', t], ['--until', t]])];
+    for (const args of windows) {
       const r = await run(['--project', join(here, 'fixtures', 'meter', name), ...args], { count, cwd: dir });
-      perArmAddsUp(r);
+      try {
+        perArmAddsUp(r);
+      } catch (e) {
+        e.message = `${name} ${args.join(' ')}: ${e.message}`;
+        throw e;
+      }
     }
   }
 });

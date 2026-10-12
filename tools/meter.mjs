@@ -36,7 +36,10 @@
 //   under a newer one; the skill entry's cost, call by call, is under the call's arm; and each message, with its
 //   saving and signals, is under the arm it was written under (see Messages), or none, as is a received message whose
 //   sender was not measured. A session counts under every arm it had a call under, and the sessions with calls under
-//   more than one are counted (multiArmSessions).
+//   more than one are counted (multiArmSessions). Each arm's shares divide by its share base: the bill of the counted
+//   calls that ran under the arm or carried one of its copies or messages, as the team's shares divide by the bill of
+//   the calls that carried a copy. A call that carried more than one arm is in each base, so the bases and the shares
+//   do not add up across arms.
 // - Cost of a copy, call by call. While a copy is in a session's context, each call bills it at the cache read price
 //   if the call's cache read reaches past the copy's end in the prompt, and at the call's write rate otherwise: its
 //   first call, a call after an idle cache miss, or a rebuilt prefix. The write rate is the call's own mix of 5-minute
@@ -65,7 +68,8 @@
 //   in the sender's context. Under lite and terse, every message is that arm's. Otherwise a message is brevity when a
 //   line after its first starts with a SPEC.md section 3 verb (DO, NO, REPLY, ASK, ASKn, An, WILL, DONE, IF, HOLD, GO,
 //   DEC, FIX, WARN, WHY, CHK, FILES, OWN, TELL, ORDER, NUM, HDR, MERGED, READY, ACK), and prose if not. A received
-//   message takes the arm and style of the sent message with the same text, when a measured transcript sent it.
+//   message takes the arm and style of its send, matched as the quality signals match it (below), when a measured
+//   transcript sent it; otherwise it has no arm.
 //   A SendMessage with no text, such as a notify_when_idle subscription, is not a message.
 //   Tokens (issue #76): msg tokens (messageTokens) adds what a session sent and what it received, so a message between
 //   two measured sessions counts at each end, and twice in a total. sent tokens (sentTokens) counts the delivered
@@ -443,6 +447,8 @@ class Transcript {
   add(item, o) {
     Object.assign(item, {
       uuid: o.uuid, ts: o.timestamp, rate: 0, rateLoaded: 0, outputRateLoaded: 0, billed: 0, rewrites: 0, rewriteRate: 0, dropped: null,
+      // The first and last counted call that carried it: it stays in context, so every counted call between did too.
+      firstBilled: null, lastBilled: null,
     });
     this.items.push(item);
     this.pending.push({ item, after: 0, beforeMarker: false });
@@ -530,6 +536,8 @@ class Transcript {
       const rate = writing ? w : r;
       if (writing && it.billed) { it.rewrites++; it.rewriteRate += rate; }
       it.billed++;
+      it.firstBilled ??= call.index;
+      it.lastBilled = call.index;
       it.rate += rate;
       if (call.loaded) it.rateLoaded += rate;
       // The skill entry has no arm of its own: each call bills it under the call's arm.
@@ -669,15 +677,18 @@ class Transcript {
     const rewrites = this.items.filter((i) => i.kind !== 'msg');
     const written = calls.map((c) => writes(c.usage));
     // By arm (issue #79): each counted call and its bill under the call's arm, each copy's cost under the copy's arm,
-    // and the skill entry's cost under the arm of each call that billed it.
+    // and the skill entry's cost under the arm of each call that billed it. The share bases wait for the messages'
+    // arms (see shareBases).
     const byArm = {};
     const at = (arm) => (byArm[arm] ??= { calls: 0, bill: 0, loadCost: 0 });
-    for (const c of calls) {
+    const shareCalls = calls.map((c) => ({ arm: c.arm, bill: callBill(c.usage, c.model, prices) }));
+    for (const c of shareCalls) {
       at(c.arm).calls++;
-      at(c.arm).bill += callBill(c.usage, c.model, prices);
+      at(c.arm).bill += c.bill;
     }
     for (const i of copies) at(i.arm).loadCost += i.tokens * i.rate;
     for (const i of this.items) for (const [arm, rate] of Object.entries(i.rateByArm ?? {})) at(arm).loadCost += i.tokens * rate;
+    const carried = copies.map((i) => ({ arm: i.arm, from: i.firstBilled, to: i.lastBilled }));
     return {
       id: this.id,
       kind: this.kind === 'subagent' ? 'subagent' : /^sdk/.test(this.entrypoint ?? '') ? 'test' : 'team',
@@ -688,6 +699,8 @@ class Transcript {
       // The arms its counted calls ran under, in order (none: no copy), and what each arm's calls and copies cost.
       callArms: [...new Set(calls.map((c) => c.arm))],
       byArm,
+      shareCalls,
+      carried,
       calls: calls.length,
       callsLoaded: calls.filter((c) => c.loaded).length,
       bill,
@@ -712,10 +725,12 @@ class Transcript {
         dir: i.dir, owned: i.owned, counted: i.counted, brevity: i.brevity, arm: i.arm, tokens: i.tokens, failed: i.failed,
         rate: i.rate, outputRate: i.outputRate, rateLoaded: i.rateLoaded, outputRateLoaded: i.outputRateLoaded,
         callIndex: i.callIndex ?? null, ts: i.ts, hash: i.hash, text: i.text, peer: i.peer, msgId: i.msgId, ord: i.ord, key: i.key,
+        firstBilled: i.firstBilled, lastBilled: i.lastBilled,
       })),
       first: this.firstHuman ? {
         owned: this.firstHuman.owned, counted: this.firstHuman.counted, rate: this.firstHuman.rate, rateLoaded: this.firstHuman.rateLoaded,
         callIndex: this.firstHuman.callIndex ?? null, candidates: this.firstHuman.candidates, ts: this.firstHuman.ts, uuid: this.firstHuman.uuid,
+        firstBilled: this.firstHuman.firstBilled, lastBilled: this.firstHuman.lastBilled,
       } : null,
       loadStart: this.loadStart,
     };
@@ -830,6 +845,8 @@ function signals(records, window) {
     const fits = all.filter((c) => samePeer(m.dir === 'sent' ? c.peer : names.get(senderOf.get(c)), m.peer));
     return fits.length === 1 ? fits[0] : undefined;
   };
+  // The send each received message is, by the same matching: settle gives the message its arm and style.
+  for (const r of records) for (const m of r.messages) if (m.dir === 'received') m.source = original(m) ?? null;
   // Whether a received message comes from the session a sent one goes to.
   const from = (m, n) => {
     const s = senderOf.get(original(m));
@@ -934,22 +951,15 @@ const WRITTEN = [...SENT, 'subagent-prompt'];
 const compressed = (m) => m.style !== 'prose' && m.arm !== 'off';
 
 // Each message's style (brevity, lite, terse or prose), ratio and estimated saving. A received message takes the arm
-// and style of the sent message with the same text, and a session's first message is a received delegation prompt
-// when it is the prompt that started the session (see linkDelegations).
+// and style of its send, matched as the quality signals match it (see signals), and a session's first message is a
+// received delegation prompt when it is the prompt that started the session (see linkDelegations).
 function settle(records, ratios) {
   const style = (m) => (m.arm === 'lite' || m.arm === 'terse' ? m.arm : m.brevity ? 'brevity' : 'prose');
-  const sent = new Map();
-  for (const r of records) {
-    for (const m of r.messages) {
-      if (!WRITTEN.includes(m.dir)) continue;
-      m.style = style(m);
-      if (m.dir === 'sent') sent.set(m.hash, m);
-    }
-  }
+  for (const r of records) for (const m of r.messages) if (WRITTEN.includes(m.dir)) m.style = style(m);
   for (const r of records) {
     for (const m of r.messages) {
       if (WRITTEN.includes(m.dir)) continue;
-      const from = m.dir === 'received' ? sent.get(m.hash) : undefined;
+      const from = m.dir === 'received' ? m.source : undefined;
       m.arm = from?.arm ?? null;
       m.style = from?.style ?? style(m);
     }
@@ -959,7 +969,7 @@ function settle(records, ratios) {
       r.messages.push({
         dir: 'delegation-received', owned: f.owned, counted: f.counted, brevity: isBrevity(f.hit.text), arm: from.arm,
         style: from.style, tokens: from.tokens, failed: false, rate: f.rate, outputRate: 0, rateLoaded: f.rateLoaded,
-        outputRateLoaded: 0, callIndex: f.callIndex, ts: f.ts,
+        outputRateLoaded: 0, callIndex: f.callIndex, ts: f.ts, firstBilled: f.firstBilled, lastBilled: f.lastBilled,
       });
     }
     for (const m of r.messages) {
@@ -967,11 +977,39 @@ function settle(records, ratios) {
       const s = (m.tokens * m.ratio) / (1 - m.ratio);
       m.saving = s * (m.rate + m.outputRate);
       m.savingLoaded = s * (m.rateLoaded + m.outputRateLoaded);
-      // Keep numbers only: no message text, session names or fingerprints leave this function.
-      for (const key of ['rate', 'outputRate', 'rateLoaded', 'outputRateLoaded', 'hash', 'text', 'peer', 'msgId', 'ord', 'key']) delete m[key];
+    }
+    shareBases(r);
+    // Keep numbers only: no message text, session names or fingerprints leave this function.
+    for (const m of r.messages) {
+      for (const key of ['rate', 'outputRate', 'rateLoaded', 'outputRateLoaded', 'hash', 'text', 'peer', 'msgId', 'ord', 'key', 'source',
+        'firstBilled', 'lastBilled']) delete m[key];
     }
     delete r.first;
   }
+}
+
+// The share base of each arm in a session (issue #79): the bill of its counted calls that ran under the arm or carried
+// one of its copies or messages. A call that carried several arms is in each one's base, as the team's loaded bill
+// holds the calls that carried a copy.
+function shareBases(r) {
+  const n = r.shareCalls.length;
+  const marks = {}; // each arm's difference array over the counted calls
+  const mark = (arm, from, to) => {
+    if (from === null || from === undefined) return;
+    const d = (marks[arm] ??= new Array(n + 1).fill(0));
+    d[from]++;
+    d[to + 1]--;
+  };
+  r.shareCalls.forEach((c, i) => mark(c.arm, i, i));
+  for (const c of r.carried) mark(c.arm, c.from, c.to);
+  for (const m of r.messages) mark(m.arm ?? 'none', m.firstBilled, m.lastBilled);
+  for (const x of Object.values(r.byArm)) x.shareBase = 0;
+  for (const [arm, d] of Object.entries(marks)) {
+    const x = (r.byArm[arm] ??= { calls: 0, bill: 0, loadCost: 0, shareBase: 0 });
+    for (let i = 0, on = 0; i < n; i++) if ((on += d[i]) > 0) x.shareBase += r.shareCalls[i].bill;
+  }
+  delete r.shareCalls;
+  delete r.carried;
 }
 
 function tally(r) {
@@ -1054,17 +1092,22 @@ function summarize(records) {
 }
 
 // What the team's calls, copies and messages add up to under each arm, by the arm in effect (see the header, issue
-// #79): a session counts under every arm it had a call under. Each share divides by the bill of the arm's calls.
+// #79): a session counts under every arm it had a call under. Each share divides by the arm's share base: the bill of
+// the calls that ran under the arm or carried one of its copies or messages (see shareBases).
 export function perArm(sessions, ratios) {
   const rows = {};
   const row = (arm) => (rows[arm] ??= {
-    ratio: arm in ratios ? ratios[arm] : null, sessions: [], calls: 0, bill: 0, loadCost: 0, sent: 0, sentTokens: 0, received: 0,
-    compressed: 0, saving: 0, net: 0, delivered: 0, clarified: 0, corrected: 0, resent: 0,
+    ratio: arm in ratios ? ratios[arm] : null, sessions: [], calls: 0, bill: 0, shareBase: 0, loadCost: 0, sent: 0, sentTokens: 0,
+    received: 0, compressed: 0, saving: 0, net: 0, delivered: 0, clarified: 0, corrected: 0, resent: 0,
     delegations: 0, delegationsStarted: 0, delegationsClarified: 0, delegationsCorrected: 0, delegationsResent: 0,
   });
+  const bases = {};
   for (const r of sessions) {
     for (const arm of r.callArms) row(arm).sessions.push(r.id);
     for (const [arm, x] of Object.entries(r.byArm)) {
+      bases[arm] = (bases[arm] ?? 0) + x.shareBase;
+      // An arm that only rode along, in messages that save nothing and were not exchanged, gets no row.
+      if (!x.calls && !x.loadCost) continue;
       const a = row(arm);
       a.calls += x.calls;
       a.bill += x.bill;
@@ -1095,9 +1138,11 @@ export function perArm(sessions, ratios) {
   const order = [...ARMS, 'none'];
   const arms = Object.fromEntries(Object.entries(rows)
     .sort(([a], [b]) => (order.indexOf(a) + 1 || 99) - (order.indexOf(b) + 1 || 99)));
-  for (const a of Object.values(arms)) {
+  for (const [arm, a] of Object.entries(arms)) {
+    a.shareBase = bases[arm] ?? 0;
     a.net = a.saving - a.loadCost;
-    a.shareOfBill = a.bill ? { loadCost: a.loadCost / a.bill, saving: a.saving / a.bill, net: a.net / a.bill } : null;
+    const b = a.shareBase;
+    a.shareOfBill = b ? { loadCost: a.loadCost / b, saving: a.saving / b, net: a.net / b } : null;
     a.per100 = per100(a);
     a.delegationPer100 = delegationPer100(a);
   }
@@ -1320,14 +1365,17 @@ export function render(r) {
         : `${r.savingRatioOverride} for brevity, lite and terse (--saving-ratio)`}; prose, and what is written under off, saves nothing.`);
 
     out.push('', 'per arm, by the arm in effect: each call under the newest copy in its context, each copy under its own arm, '
-      + 'each message under the arm it was written under (none: no copy, or a message from a session not read; '
-      + '% = share of the bill of the arm\'s calls):');
+      + 'each message under the arm it was written under (none: no copy, or a message from a session not read):');
     const share = (a, key) => (a.shareOfBill ? pct(a.shareOfBill[key]) : '-');
     out.push(table([
-      ['arm', 'ratio', 'sessions', 'calls', 'bill', 'load cost', 'load %', 'sent', 'received', 'est. saving', 'saving %', 'net', 'net %'],
-      ...Object.entries(r.team.arms).map(([arm, a]) => [arm, a.ratio ?? '-', fmt(a.sessions.length), fmt(a.calls), fmt(a.bill), fmt(a.loadCost),
-        share(a, 'loadCost'), fmt(a.sent), fmt(a.received), fmt(a.saving), share(a, 'saving'), signed(a.net), share(a, 'net')]),
+      ['arm', 'ratio', 'sessions', 'calls', 'bill', 'share base', 'load cost', 'load %', 'sent', 'received', 'est. saving', 'saving %', 'net',
+        'net %'],
+      ...Object.entries(r.team.arms).map(([arm, a]) => [arm, a.ratio ?? '-', fmt(a.sessions.length), fmt(a.calls), fmt(a.bill),
+        fmt(a.shareBase), fmt(a.loadCost), share(a, 'loadCost'), fmt(a.sent), fmt(a.received), fmt(a.saving), share(a, 'saving'),
+        signed(a.net), share(a, 'net')]),
     ]));
+    out.push('share base = the bill of the calls that ran under the arm or carried one of its copies or messages; each % '
+      + 'divides by it. A call that carried more than one arm is in each base, so the bases and shares do not add up across arms.');
     const multi = r.team.sessions.filter((x) => x.callArms.length > 1);
     out.push(`sessions = the sessions with a call under the arm: ${multi.length
       ? `${plural(multi.length, 'session')} of ${fmt(t.sessions)} had calls under more than one arm and count under each `

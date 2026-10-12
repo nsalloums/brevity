@@ -13,16 +13,29 @@ Changes waiting on `next` for the next release (see [RELEASING.md](RELEASING.md)
   longer keep `2.637`, which may be a decimal. `2.637` and `2637` in one message are two numbers, and a dotted
   number is now checked even when a #N or a SHA of the original carries its digits (`2.637` after `#2637`). Each
   of these can flag an encoding that 0.9.0 passed. `--legacy` is unchanged (#81).
-- `tools/meter.mjs`: the per-arm summary goes by the arm in effect, not by each session's last arm (#79). Each call
-  and its bill count under the arm of the newest copy in its context, or none. Each copy's load cost counts under its
-  own arm, and the skill entry's under the arm of each call that bills it. Each message, with its saving and quality
-  signals, counts under the arm it was written under. A session counts under every arm it had a call under, and the
-  output names the sessions with more than one. `team.arms` in `--json` keeps every key and adds `sentTokens`. Its
-  values change for sessions that switched arms or made calls before their first copy, and for received messages:
-  those count under their sender's arm, or under none when the meter did not read the sender. A session whose calls
-  all ran under one arm, and whose received messages were written under that arm, keeps its values. New keys:
-  `callArms` and `byArm` per session, and `multiArmSessions` in the totals. Team totals and `team.sentByArm` do not
-  change.
+- `tools/meter.mjs`: the per-arm summary goes by the arm in effect, not by each session's last arm (#79):
+  - Each call and its bill count under the arm of the newest copy in its context, or none.
+  - Each copy's load cost counts under its own arm, also at calls under a newer arm. The skill entry's cost counts
+    under the arm of each call that bills it.
+  - Each message, with its saving and quality signals, counts under the arm it was written under. A received
+    message from a session the meter did not read, and a subagent's result, count under none.
+  - A received message takes the arm and style of its send, matched as the quality signals match it: `msg_id`, then
+    the only send with its text, then the sender's name. Before, it took them from the last send read with the same
+    text. A received message whose `msg_id` names another sender can change its arm, style and saving, and so the
+    team's estimated saving.
+  - Each arm's shares divide by its share base (`shareBase`): the bill of the calls that ran under the arm or
+    carried one of its copies or messages. A call that carried more than one arm is in each base, so the bases and
+    the shares do not add up across arms. Every arm's shares change.
+  - A session counts under every arm it had a call under, and the output names the sessions with more than one.
+
+  A session's numbers stay in one arm's row only when its counted calls, and the copies and messages those calls
+  carried, were all under that arm. They split when the session switched arms or made calls before its first copy.
+  They also split when it still carried an earlier arm's copy or messages: after a switch, in a window that starts
+  after one, or in a transcript that continues another session. Messages received from another arm, from a session
+  the meter did not read, or from a subagent split them too. `team.arms` in `--json` keeps every key and adds
+  `sentTokens` and `shareBase`. `team.sentByArm` keeps its counts, but its rows with nothing sent follow
+  `team.arms`, so an arm can gain or lose an empty row. New keys: `callArms` and `byArm` per session, and
+  `multiArmSessions` in the totals.
 
 ## [0.9.0] - 2026-10-12
 

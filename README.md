@@ -186,7 +186,7 @@ such as a `notify_when_idle` subscription, is not one. Two columns count tokens:
 
 The estimated saving counts nothing twice: each end saves on its own calls. Below the table come the team's mean
 length per sent message, its shares of the bill, and how often and at what cost copies were written again. Next come
-a summary per arm (sessions, calls, bill, load cost, messages, estimated saving, net and their shares of the bill),
+a summary per arm (sessions, calls, bill, share base, load cost, messages, estimated saving, net and their shares),
 then the messages sent by the arm each was written under, with their tokens and mean length, and each run of
 duplicated copies. The per-arm summary goes by the arm in effect, so a session that switched arms is split across
 them:
@@ -195,13 +195,19 @@ them:
 - Each copy's load cost counts under the copy's own arm, even at calls under a newer arm. The skill entry's cost
   counts under the arm of each call that bills it.
 - Each message, with its estimated saving and quality signals, counts under the arm it was written under. A
-  received message takes its sender's arm, and one from a session the meter did not read counts under none.
+  received message takes the arm of its send, found by `msg_id`, else by its text, else by its sender's name, as
+  for the quality signals below. A received message from a session the meter did not read, and a subagent's
+  result, count under none.
 
 A session counts under every arm it had a call under, so the sessions column can add up to more than the team. The
-output names the sessions that had more than one arm. Each share divides by the bill of the arm's calls. To compare
-message lengths across arms, use the table by the arm each message was written under. In `--json` the counts are
-`sentTokens`, `meanSentTokens`, `messageTokens`, `team.sentByArm` and `multiArmSessions`. Each session adds
-`callArms` and `byArm` (its calls, bill and load cost by arm), and its drops by compaction and resume.
+output names the sessions that had more than one arm. Each arm's shares divide by its share base, the bill of the
+calls that ran under the arm or carried one of its copies or messages. That is how the team's shares divide by the
+calls that carried a copy. A call that carried more than one arm, such as a call after a switch that still carries
+the old copy, is in each of their bases, so the bases and the shares do not add up across arms. To compare message
+lengths across arms, use the table by the arm each message was written under. In `--json` the counts are
+`sentTokens`, `meanSentTokens`, `messageTokens`, `team.sentByArm` and `multiArmSessions`, and each arm has its
+`shareBase`. Each session adds `callArms` and `byArm` (its calls, bill, load cost and share base by arm), and its
+drops by compaction and resume.
 
 The saving is an estimate, because a real message has no prose original to compare with. Each arm's ratio comes
 from the single-pass pilot: brevity 0.154, lite 0.087 and terse 0.102. Messages written under off save nothing, and
