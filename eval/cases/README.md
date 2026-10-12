@@ -39,6 +39,10 @@ claude plugin eval --eval-dir eval/cases --scaffold
   indicators only and do not count toward the score. `skill-not-used` sets `arm: both`, so it counts in both arms.
 - brevity is meant to be readable without the spec, so Claude may decode `decode-brevity-message` well without the
   plugin, and its `Δ` can be small.
+- A judge model scores the `llm` graders, so their verdicts vary from run to run and depend on `--judge-model`. The
+  default judge passes the no-plugin reply to `encode-prose-message` on `plain-line-1`, which Sonnet fails, and
+  Sonnet fails about half of the correct decodes in `decode-brevity-message`
+  (see [issue #69](https://github.com/nsalloums/brevity/issues/69)). Say which judge you used when you report scores.
 - The hook looks for a `.brevity/` folder from the run's temporary workspace upwards. If a `.brevity/` folder sits
   above that workspace (on Windows the temporary directory is usually inside your home folder), every case is opted
   in, and the spec loads into all their runs with the plugin.
