@@ -61,9 +61,11 @@
 //   line after its first starts with a SPEC.md section 3 verb (DO, NO, REPLY, ASK, ASKn, An, WILL, DONE, IF, HOLD, GO,
 //   DEC, FIX, WARN, WHY, CHK, FILES, OWN, TELL, ORDER, NUM, HDR, MERGED, READY, ACK), and prose if not. A received
 //   message takes the arm and style of the sent message with the same text, when a measured transcript sent it.
+//   A SendMessage with no text, such as a notify_when_idle subscription, is not a message.
 //   Tokens (issue #76): msg tokens (messageTokens) adds what a session sent and what it received, so a message between
 //   two measured sessions counts at each end, and twice in a total. sent tokens (sentTokens) counts the delivered
-//   messages and prompts a session sent, each once; meanSentTokens divides it by how many there were.
+//   messages and prompts a session sent, each once; meanSentTokens divides it by how many there were. sentByArm adds
+//   them up by the arm each was written under, while the per-arm summary files a session under its own arm (issue #79).
 // - Savings, an estimate. No prose original exists for a real message, so a message of t tokens is taken to replace
 //   prose of t / (1 - r) tokens and to save s = t x r / (1 - r). r is the ratio of its style, from the single-pass
 //   pilot in issue #26: brevity 0.154, lite 0.087, terse 0.102. Prose, and every message written under off, save
@@ -563,6 +565,8 @@ class Transcript {
 
   toolUse(b, o, call) {
     const name = b.name ?? '';
+    // A SendMessage with no text, such as a notify_when_idle subscription, sends no message.
+    if (name === 'SendMessage' && !str(b.input?.message ?? b.input?.content).trim()) return;
     let item;
     if (name === 'SendMessage') item = this.message('sent', b.input?.message ?? b.input?.content, b.id, o, call.counted);
     else if (DELEGATION.test(name)) item = this.message('delegation-sent', b.input?.prompt, b.id, o, call.counted);
@@ -1033,7 +1037,7 @@ export function perArm(sessions, ratios) {
   for (const r of [...sessions].sort((a, b) => (order.indexOf(a.arm) + 1 || 99) - (order.indexOf(b.arm) + 1 || 99))) {
     const t = r.tally;
     const a = (arms[r.arm] ??= {
-      ratio: r.arm in ratios ? ratios[r.arm] : null, sessions: [], calls: 0, bill: 0, loadCost: 0, sent: 0, sentTokens: 0, received: 0,
+      ratio: r.arm in ratios ? ratios[r.arm] : null, sessions: [], calls: 0, bill: 0, loadCost: 0, sent: 0, received: 0,
       compressed: 0, saving: 0, net: 0, delivered: 0, clarified: 0, corrected: 0, resent: 0,
       delegations: 0, delegationsStarted: 0, delegationsClarified: 0, delegationsCorrected: 0, delegationsResent: 0,
     });
@@ -1042,7 +1046,6 @@ export function perArm(sessions, ratios) {
     a.bill += r.bill;
     a.loadCost += r.specCost;
     a.sent += t.sentBrevity + t.sentLite + t.sentTerse + t.sentProse;
-    a.sentTokens += t.sentTokens;
     a.received += t.receivedBrevity + t.receivedLite + t.receivedTerse + t.receivedProse;
     a.compressed += r.messages.filter((m) => m.counted && !m.failed && [...SENT, ...RECEIVED].includes(m.dir) && compressed(m)).length;
     a.saving += r.saving;
@@ -1050,12 +1053,26 @@ export function perArm(sessions, ratios) {
     for (const k of ['delivered', ...SIGNALS, 'delegations', 'delegationsStarted', ...Object.values(DELEGATION_SIGNALS)]) a[k] += t[k];
   }
   for (const a of Object.values(arms)) {
-    a.meanSentTokens = meanSent(a.sentTokens, a.sent);
     a.shareOfBill = a.bill ? { loadCost: a.loadCost / a.bill, saving: a.saving / a.bill, net: a.net / a.bill } : null;
     a.per100 = per100(a);
     a.delegationPer100 = delegationPer100(a);
   }
   return arms;
+}
+
+// The messages the sessions sent, by the arm each was written under (none: no copy in the sender's context), with
+// their tokens and mean length. Unlike perArm, a session that switched arms counts under each (issue #79). Every arm in
+// `arms` gets a row.
+export function sentByArm(sessions, arms = {}) {
+  const ms = sessions.flatMap((r) => r.messages.filter((m) => m.counted && !m.failed && SENT.includes(m.dir)));
+  const order = [...ARMS, 'none'];
+  const keys = [...new Set([...Object.keys(arms), ...ms.map((m) => m.arm ?? 'none')])]
+    .sort((a, b) => (order.indexOf(a) + 1 || 99) - (order.indexOf(b) + 1 || 99));
+  return Object.fromEntries(keys.map((arm) => {
+    const mine = ms.filter((m) => (m.arm ?? 'none') === arm);
+    const sentTokens = mine.reduce((a, m) => a + m.tokens, 0);
+    return [arm, { sent: mine.length, sentTokens, meanSentTokens: meanSent(sentTokens, mine.length) }];
+  }));
 }
 
 // The cost-model sessions file: calls and compressed messages from the session's first copy on.
@@ -1144,6 +1161,7 @@ export async function run(argv, { cwd = process.cwd(), home = process.env.CLAUDE
   const subagents = records.filter((r) => r.kind === 'subagent' && r.calls > 0);
   const models = {};
   for (const r of team) for (const [m, n] of Object.entries(r.models)) models[m] = (models[m] ?? 0) + n;
+  const arms = perArm(team, ratios);
   const result = {
     tokenizer: tok.name,
     tokenizerForced: !!tok.forced,
@@ -1156,7 +1174,7 @@ export async function run(argv, { cwd = process.cwd(), home = process.env.CLAUDE
     window: { since: o.since === undefined ? null : new Date(o.since).toISOString(), until: o.until === undefined ? null : new Date(o.until).toISOString() },
     folders: dirs.length,
     transcripts: { sessions: sources.filter((s) => s.kind === 'session').length, subagents: sources.filter((s) => s.kind === 'subagent').length },
-    team: { sessions: team, total: summarize(team), arms: perArm(team, ratios) },
+    team: { sessions: team, total: summarize(team), arms, sentByArm: sentByArm(team, arms) },
     tests: { sessions: tests, total: summarize(tests) },
     subagents: { total: summarize(subagents) },
     duplicates: team.flatMap((r) => r.duplicates.map((d) => ({ session: r.id.slice(0, 8), ...d }))),
@@ -1234,8 +1252,10 @@ export function render(r) {
     out.push('arm = the arm of the last copy the session\'s counted calls carried, else of its last copy (none: no copy).');
     out.push(`${split} = ${styles.map((s) => s.toLowerCase()).join('/')}.`);
     out.push('sent = SendMessage deliveries and delegation prompts; received = peer messages and delegation prompts.');
-    out.push(`sent tokens = the tokens of the messages sent, each counted once, at its sender: the team sent ${fmt(t.sentTokens)} `
-      + `in ${plural(t.sentBrevity + t.sentLite + t.sentTerse + t.sentProse, 'message')}, a mean length of ${fmt(t.meanSentTokens)} tokens.`);
+    const sentCount = t.sentBrevity + t.sentLite + t.sentTerse + t.sentProse;
+    out.push(`sent tokens = the tokens of the messages sent, each counted once, at its sender: ${sentCount
+      ? `the team sent ${fmt(t.sentTokens)} in ${plural(sentCount, 'message')}, a mean length of ${fmt(t.meanSentTokens)} tokens`
+      : 'no message sent'}.`);
     out.push('msg tokens (both ends) = sent plus received tokens: a message between two measured sessions counts at each end, '
       + 'so the total counts it twice. For message lengths, use sent tokens.');
     if (t.billLoaded) {
@@ -1256,14 +1276,20 @@ export function render(r) {
         ? `brevity ${rs.brevity}, lite ${rs.lite}, terse ${rs.terse} (the single-pass pilot, issue #26)`
         : `${r.savingRatioOverride} for brevity, lite and terse (--saving-ratio)`}; prose, and what is written under off, saves nothing.`);
 
-    out.push('', 'per arm (each session under its arm, as above; tokens/sent = sent tokens / sent; % = share of those sessions\' bill):');
+    out.push('', 'per arm (each session under its arm, as above, with all it sent, even under an earlier arm, issue #79; '
+      + '% = share of those sessions\' bill):');
     const share = (a, key) => (a.shareOfBill ? pct(a.shareOfBill[key]) : '-');
     out.push(table([
-      ['arm', 'ratio', 'sessions', 'calls', 'bill', 'load cost', 'load %', 'sent', 'sent tokens', 'tokens/sent', 'received', 'est. saving',
-        'saving %', 'net', 'net %'],
+      ['arm', 'ratio', 'sessions', 'calls', 'bill', 'load cost', 'load %', 'sent', 'received', 'est. saving', 'saving %', 'net', 'net %'],
       ...Object.entries(r.team.arms).map(([arm, a]) => [arm, a.ratio ?? '-', fmt(a.sessions.length), fmt(a.calls), fmt(a.bill), fmt(a.loadCost),
-        share(a, 'loadCost'), fmt(a.sent), fmt(a.sentTokens), fmt(a.meanSentTokens), fmt(a.received), fmt(a.saving), share(a, 'saving'),
-        signed(a.net), share(a, 'net')]),
+        share(a, 'loadCost'), fmt(a.sent), fmt(a.received), fmt(a.saving), share(a, 'saving'), signed(a.net), share(a, 'net')]),
+    ]));
+
+    out.push('', 'sent messages by the arm each was written under (the newest copy in the sender\'s context; none: no copy), '
+      + 'the lengths to compare arms; tokens/sent = sent tokens / sent:');
+    out.push(table([
+      ['arm', 'sent', 'sent tokens', 'tokens/sent'],
+      ...Object.entries(r.team.sentByArm).map(([arm, a]) => [arm, fmt(a.sent), fmt(a.sentTokens), fmt(a.meanSentTokens)]),
     ]));
 
     const s = r.signals;

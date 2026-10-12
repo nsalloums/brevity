@@ -43,7 +43,7 @@
 //
 // tools/fixtures/meter/ends holds two lite sessions where every message is measured at both ends (issue #76). "lead"
 // spawns "dev" with a delegation prompt (23 tokens at chars/4); dev reports to lead (20 tokens), and lead answers it
-// (18 tokens).
+// (18 tokens). Then lead subscribes to dev's idle notice: a SendMessage with no message.
 //
 // Every run that checks numbers counts tokens with chars/4: run() takes `count`, and the command line gets
 // BREVITY_METER_TOKENIZER=chars/4, so the numbers hold whether or not @anthropic-ai/tokenizer is installed (issue #60).
@@ -459,9 +459,17 @@ test('the per-arm summary adds up the sessions under each arm', async () => {
   assert.match(text, /^terse +terse +3 +3,222 +1 +168 +0\/0\/1\/0 +0\/1\/0\/0 /m);
   assert.match(text, /^arm = the arm of the last copy the session's counted calls carried, else of its last copy/m);
   assert.match(text, /^per arm \(each session under its arm, as above/m);
-  assert.match(text, /^lite +0\.087 +1 +2 +2,810 +205 +7\.29% +1 +25 +25 +0 +17 +0\.59% +-188 +-6\.70%$/m);
+  assert.match(text, /^lite +0\.087 +1 +2 +2,810 +205 +7\.29% +1 +0 +17 +0\.59% +-188 +-6\.70%$/m);
   assert.match(text, /^none +- +1 +1 +1,255 +0 /m);
-  assert.equal(a.none.meanSentTokens, null, 'with no message sent, no mean length');
+  // By the arm each message was written under, switch's M3 counts under lite, though switch is under off (issue #79).
+  const byArm = r.team.sentByArm;
+  assert.deepEqual(Object.entries(byArm).map(([arm, x]) => [arm, x.sent, x.sentTokens]),
+    [['lite', 2, 25 + 18], ['terse', 1, 16], ['off', 1, 14], ['none', 0, 0]]);
+  close(byArm.lite.meanSentTokens, (25 + 18) / 2);
+  assert.equal(byArm.none.meanSentTokens, null, 'with no message sent, no mean length');
+  assert.match(text, /^sent messages by the arm each was written under /m);
+  assert.match(text, /^arm +sent +sent tokens +tokens\/sent\nlite +2 +43 +22$/m);
+  assert.match(text, /^none +0 +0 +-$/m);
   assert.match(text, /with r = brevity 0\.154, lite 0\.087, terse 0\.102 \(the single-pass pilot, issue #26\)/);
   assert.match(text, /messages: 1 brevity, 2 lite, 1 terse and 0 prose SendMessage deliveries/);
 });
@@ -469,23 +477,37 @@ test('the per-arm summary adds up the sessions under each arm', async () => {
 test('sent tokens count each message once; msg tokens count it at each measured end (issue #76)', async () => {
   const r = await run(['--project', join(here, 'fixtures', 'meter', 'ends')], { count, cwd: dir });
   const [prompt, report, answer] = [23, 20, 18];
-  // Each message is in its sender's tally as sent and in its receiver's as received.
+  // Each message is in its sender's tally as sent and in its receiver's as received. The subscription is neither.
   assert.deepEqual(['lead', 'dev'].map((id) => [session(r, id).tally.sentTokens, session(r, id).tally.messageTokens]),
     [[prompt + answer, prompt + answer + report], [report, report + answer + prompt]]);
+  assert.deepEqual(messages(session(r, 'lead'), 'sent').map((m) => m.tokens), [answer]);
   const t = r.team.total;
+  assert.deepEqual([t.sentLite, t.receivedLite, t.failed, t.delivered, t.delegations], [3, 3, 0, 2, 1]);
   assert.equal(t.sentTokens, prompt + report + answer);
   assert.equal(t.messageTokens, 2 * t.sentTokens, 'both ends measured: every message counted twice');
   close(t.meanSentTokens, (prompt + report + answer) / 3);
-  const { lite } = r.team.arms;
-  assert.deepEqual([lite.sent, lite.sentTokens], [3, prompt + report + answer]);
-  close(lite.meanSentTokens, (prompt + report + answer) / 3);
+  assert.deepEqual(r.team.sentByArm, { lite: { sent: 3, sentTokens: prompt + report + answer, meanSentTokens: t.meanSentTokens } });
   const text = render(r);
   assert.match(text, /^session +arm +.* +sent tokens +msg tokens \(both ends\) +est\. saving +net$/m);
   assert.match(text, /^total +6 +6,552 +2 +193 +0\/3\/0\/0 +0\/3\/0\/0 +61 +122 /m);
   assert.match(text, /^sent tokens = .*: the team sent 61 in 3 messages, a mean length of 20 tokens\.$/m);
   assert.match(text, /^msg tokens \(both ends\) = .* counts at each end, so the total counts it twice\./m);
-  assert.match(text, /^arm +ratio +sessions +calls +bill +load cost +load % +sent +sent tokens +tokens\/sent +received /m);
-  assert.match(text, /^lite +0\.087 +2 +6 +6,552 +193 +2\.95% +3 +61 +20 +3 /m);
+  assert.match(text, /^lite +3 +61 +20$/m);
+});
+
+test('the mean length divides by the messages sent, not received or failed; with none sent, it says so', async () => {
+  // The team fixture: the hub delivers 50 and 40 tokens and a 100-token prompt, and fails to send 48; the peer sends 40.
+  // Received: the hub gets 60, the peer 30 and the prompt.
+  const r = await meter();
+  const t = r.team.total;
+  assert.deepEqual([t.sentBrevity + t.sentProse, t.receivedBrevity + t.receivedProse, t.failed], [4, 3, 1]);
+  assert.deepEqual(messages(session(r, 'peer'), 'sent').map((m) => m.tokens), [40]);
+  assert.equal(t.sentTokens, 50 + 40 + 100 + 40);
+  close(t.meanSentTokens, (50 + 40 + 100 + 40) / 4);
+  assert.match(render(r), /^sent tokens = .*: the team sent 230 in 4 messages, a mean length of 58 tokens\.$/m);
+  const none = await meter('--since', '2026-01-05T11:00:00Z');
+  assert.equal(none.team.total.meanSentTokens, null);
+  assert.match(render(none), /^sent tokens = the tokens of the messages sent, each counted once, at its sender: no message sent\.$/m);
 });
 
 test('--saving-ratio replaces the ratio of every arm, and off still saves nothing', async () => {
