@@ -44,9 +44,9 @@ spec), with blind decoding and two independent audits:
   (14.9; 95% CI 11.2-19.7).
 - **25% fewer tokens after nine rounds of auditing and repair** (63,861 -> 47,776; median per message 201 ->
   160.5), with no known decision-relevant loss and every SHA, #N, file:line, number and quote kept that the 0.7.0
-  identifier check covers (2,637 identifiers, 0 missing; [#56](https://github.com/nsalloums/brevity/issues/56)
-  widened the check since). Those encoders aimed at 50%, and every loss the audits confirmed was fixed. A session
-  writes each message once, with no audit.
+  identifier check covers (2,637 identifiers, 0 missing; [#56](https://github.com/nsalloums/brevity/issues/56) and
+  [#64](https://github.com/nsalloums/brevity/issues/64) widened the check since). Those encoders aimed at 50%, and
+  every loss the audits confirmed was fixed. A session writes each message once, with no audit.
 - **Terse English did about as well.** In the pilot, on the messages that no approach lost a fact in, brevity saved
   only about 3 tokens per message more than a 167-token instruction to write terse English with the same
   dictionary, which loads in less than half the tokens. Without the dictionary, that instruction came out ahead on
@@ -76,7 +76,9 @@ it on any way of shortening agent messages.
   decision-relevant fact was lost in about 15 of every 100 messages (see [Results](#results)).
   [tools/idcheck.mjs](tools/idcheck.mjs) catches a missing SHA, #N, file:line, number or diffstat of 10 or more (of
   any size with `--small-numbers`), or «quoted» text when it is run on the originals and their encodings, and prints
-  the coverage it used. A session does not run it as it writes, and no tool checks owners, conditions or requests.
+  the coverage it used. A number counts before a unit (`30-day`), as the second of a pair (`118/120`, but not the
+  minutes of a time) and with thousands separators (`1,088`). Its header lists what it skips. A session does not run
+  it as it writes, and no tool checks owners, conditions or requests.
   When the slots would lose nuance, free prose is allowed (`> ...`).
 
 ## When it pays off
@@ -175,9 +177,21 @@ It prints a table with one row per session: its arm, its model calls, its bill i
 copies that the hook injected, and their load cost. That cost is priced call by call, so it includes copies written
 again after an idle cache miss, re-injections after a compaction, and duplicates after a resume. The row also gives
 the messages the session sent and received, by style (brevity, lite, terse or prose), their tokens, the estimated
-saving and the net. Below the table come the team's shares of the bill, how often and at what cost copies were
-written again, a summary per arm (sessions, calls, bill, load cost, messages, estimated saving, net and their shares
-of the bill), and each run of duplicated copies; `--json` adds each session's drops by compaction and resume.
+saving and the net. Sent messages are SendMessage deliveries and delegation prompts. A SendMessage with no message,
+such as a `notify_when_idle` subscription, is not one. Two columns count tokens:
+
+- `sent tokens` counts each message the session sent, once. Divide it by the messages sent for their mean length.
+- `msg tokens (both ends)` adds the messages the session received. A message between two sessions that the meter
+  reads counts at each end, so the team total counts it twice. Use `sent tokens` for message lengths.
+
+The estimated saving counts nothing twice: each end saves on its own calls. Below the table come the team's mean
+length per sent message, its shares of the bill, and how often and at what cost copies were written again. Next come
+a summary per arm (sessions, calls, bill, load cost, messages, estimated saving, net and their shares of the bill),
+then the messages sent by the arm each was written under, with their tokens and mean length, and each run of
+duplicated copies. The per-arm summary files a session under its arm with everything it sent, even what it sent under
+an earlier arm (#79). To compare message lengths across arms, use the table by the arm each message was written
+under. In `--json` the counts are `sentTokens`, `meanSentTokens`, `messageTokens` and `team.sentByArm`, and each
+session's drops by compaction and resume are added.
 
 The saving is an estimate, because a real message has no prose original to compare with. Each arm's ratio comes
 from the single-pass pilot: brevity 0.154, lite 0.087 and terse 0.102. Messages written under off save nothing, and
@@ -424,9 +438,11 @@ node tools/idcheck.mjs messages.json encodings.json --verbose
 Build `messages.json` yourself, from messages you are allowed to use, as `[{"id": "m001", "text": "..."}]`, and
 write their encodings as `[{"id": "m001", "enc": "..."}]`. `measure.mjs` counts tokens before and after (with
 `@anthropic-ai/tokenizer` if it is installed, otherwise characters / 4). `idcheck.mjs` checks, deterministically,
-that every SHA, #N, file:line, number of 10 or more and «quote» of each original survives in its encoding. The
-`coverage` line in its output names what it checked, its header lists the exceptions, and `--small-numbers` adds
-numbers below 10. Keep real messages out of version control.
+that every SHA, #N, file:line, number of 10 or more and «quote» of each original survives in its encoding,
+including numbers before a unit (`30-day`), after `N/` or `N:` (`118/120`, not the minutes of `14:30`) and grouped
+in thousands (`1,088` or `2.637`, kept as `1,088`, `1.088` or `1088`). The `coverage` line in its output names what
+it checked, its header lists the exceptions, and `--small-numbers` adds numbers below 10. Keep real messages out of
+version control.
 
 To check that each fact still arrives, and to compare approaches on the same messages, follow
 [eval/METHOD.md](eval/METHOD.md).

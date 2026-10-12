@@ -3,6 +3,105 @@
 Every entry follows [RELEASING.md](RELEASING.md): a criticality level, why the release exists, what changed, the
 evidence, compatibility and upgrade steps. Versions follow semantic versioning read from the protocol's side.
 
+## [0.9.0] - 2026-10-12
+
+**Criticality:** normal. The meter no longer reports message sizes twice over, and the identifier check covers
+numbers it used to skip.
+
+### Why
+
+- **#76, normal.** The meter's `msg tokens` total counted every message between two measured sessions once at each
+  end, and nothing in its output or the README said so. Read as a size, it gave twice the mean length: the cycle-1
+  arm comparison on #11 published about 770 tokens per message, where the messages averaged about 385 (corrected on
+  #11). The meter also counted a `notify_when_idle` subscription, a SendMessage with no message, as a delivered
+  message of 0 tokens.
+- **#64, low.** `tools/idcheck.mjs` skipped a number before a unit (`30-day`), the later numbers of `N/M` (`118/120`),
+  and read a number grouped in thousands (`1,088`) as its last group, so its default run left out numbers that
+  messages carry.
+
+### Changes
+
+- **Tools:**
+  - `tools/meter.mjs`:
+    - reports `sent tokens`, which counts each message once, at its sender, with the mean length per sent message,
+      for the team and by the arm each message was written under (`sentTokens`, `meanSentTokens` and
+      `team.sentByArm` in `--json`);
+    - relabels the `msg tokens` column `msg tokens (both ends)`. It still counts a message at each end, so a team
+      total counts every message between measured sessions twice, and `messageTokens` keeps its meaning;
+    - no longer counts a SendMessage with no message, such as a `notify_when_idle` subscription, as a message. Where
+      a session subscribed, its sent and delivered counts drop. The quality and delegation signals no longer treat
+      the subscription as a message, so their rates and a few clarified or corrected flags can change, and so can
+      the `--team-json` sent counts and the `--saving` of its compare command (#76).
+  - `tools/idcheck.mjs` also checks, by default:
+    - a number before a unit (`30-day`, `512mb`, `8080/tcp`);
+    - the later numbers of `N/M` and `N:M`, except times (`118/120`);
+    - a number grouped in thousands, as one number (`1,088`, `2.637`).
+
+    A number of four or more digits, grouped or not, counts as kept by the same digits with one `,` or `.`
+    separator or with none, so `1,088`, `1.088` and `1088` keep each other. That also lets `1.500` keep `1500`,
+    which reads as 1.5 in English (#81). `--legacy` is unchanged (#64).
+- **Docs:**
+  - the README's "Measure your own team" says what each token column counts, and that the per-arm summary files a
+    session under its last arm (#79);
+  - the README, eval/METHOD.md and eval/RESULTS.md describe the identifier check's wider default, and say what
+    the published 2,637 figure did not check (#64).
+
+### Evidence
+
+- **Identifier check.** On the private evaluation's final encodings, 268 messages:
+
+  | mode | identifiers checked | missing |
+  |---|---|---|
+  | `--legacy` | 2,637 | 0, identical to the published figure |
+  | 0.8.0 default | 2,649 | 0 |
+  | new default | 2,686 | 2 |
+  | `--small-numbers` | 3,000 | 42 (0.8.0: 2,958 and 40) |
+
+  The 2 are one fact in two related messages: the documented reference value of an `N/M` count, which both encodings
+  left out while keeping the measured `N/M`. The two-lens audit had rated that omission incidental in one message and
+  did not flag it in the other, so neither is a confirmed decision-relevant loss. On the five pilot arms, the new
+  default checks 2,686 identifiers and finds 0 missing in each.
+- **Meter.**
+  - On this project's transcripts up to 2026-10-04T00:00Z, the 0.8.0 meter and this one report the same totals,
+    with the tokenizer and with chars/4: 9 sessions, 1,101 calls, a 38,283,857 bill, 13 copies, and the same spec
+    cost, saving and net.
+  - Over all of this project's transcripts, the only other differences are the new fields and 3 subscriptions,
+    which drop out of the sent and delivered counts and let one more delegation prompt be flagged as corrected.
+  - On the two windows in #76, with chars/4 as there, `sentTokens` gives 28,080 tokens in 73 messages (mean 385)
+    and 20,139 in 52 (mean 387), exactly half of `messageTokens`.
+  - The change had three review passes, and its tests catch every mutant they were checked against, among them a
+    mean over the wrong count, a subscription counted as a message, and failed sends in the by-arm table.
+- **Tests:** `node --test tools/*.test.mjs` gives 96 of 96 without the tokenizer and 96 of 96 with it.
+- **Plugin.** Nothing in `hooks/`, `arms/` or SKILL.md changed; the skill's SPEC.md changes only the version in
+  its title.
+  - `claude plugin validate .` passes.
+  - The four hook commands print brevity 9,277 characters in part 0 (as in 0.8.0), lite 1,461, terse 759, off the
+    26-character marker, and nothing without `.brevity/`.
+  - The real `claude -p --plugin-dir` run was not repeated, because the hook did not change.
+- **Spec size:** 99 lines, 9,221 characters, 2,680 legacy tokens; only the version in the title changes.
+- **Checks:** `node scripts/release-check.mjs --base origin/main` and `node tools/build-adapters.mjs --check` pass.
+
+### Compatibility
+
+Every message written under 0.8 decodes the same: the spec changes only the version in its title.
+
+The meter's JSON adds `sentTokens`, `meanSentTokens` and `team.sentByArm`, and keeps every earlier key. Its text
+output gains a `sent tokens` column before `msg tokens (both ends)`, the renamed `msg tokens`, so the columns after
+it move one place, and a table of sent messages by the arm each was written under follows the per-arm summary. Where
+a session subscribed, sent and delivered counts drop, and signal counts and rates can change.
+
+`tools/idcheck.mjs` checks more by default, so it can flag encodings that 0.8.0 passed. It also passes a few that
+0.8.0 flagged: a four-digit or longer number written with one separator, such as `1.500` for `1500` (#81). No option
+gives the 0.8.0 default back: `--legacy` still gives the 0.7.0 coverage.
+
+### Upgrade
+
+- **Claude Code plugin users:** run `/plugin marketplace update brevity`.
+- **Meter:** for message lengths, read `sent tokens`, not `msg tokens (both ends)`. To compare arms, read the table
+  by the arm each message was written under, or use `--since`/`--until` windows that each hold one arm (#79).
+- **Identifier check:** if you run it in a pipeline, check the printed `coverage` line, or pin `--legacy`.
+- **Other surfaces:** projects that copy SPEC.md, the Cursor rule or the AGENTS.md block re-copy them.
+
 ## [0.8.0] - 2026-10-11
 
 **Criticality:** normal. The identifier check covers what the docs said it covered, the meter's quality signals
