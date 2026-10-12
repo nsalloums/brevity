@@ -13,8 +13,9 @@ under each session's last arm, and the identifier check no longer passes `1.500`
 - **#79, normal.** The per-arm summary filed each session under the arm of its last copy, with all of its calls,
   copies, messages, savings and signals. A session that switched arms counted entirely under its last arm. On this
   project's transcripts one session went through brevity, terse and lite, and the per-arm rows put the messages
-  written under brevity at 317 tokens, below terse's 353, when they averaged 411. A comparison of arms without
-  windows that each hold one arm could come out in the wrong order, and this repository rotates arms to compare them.
+  written under brevity at 317 tokens (chars/4), below terse's 353, when they averaged 411. A comparison of arms
+  without windows that each hold one arm could come out in the wrong order, and this repository rotates arms to
+  compare them.
 - **#81, low.** Since 0.9.0, `tools/idcheck.mjs`'s default counted `1.500` as keeping `1500`, which reads as 1.5 in
   English, and `2,637` or `2637` as keeping a decimal `2.637`.
 
@@ -36,8 +37,9 @@ under each session's last arm, and the identifier check no longer passes `1.500`
       move or drop a flag where a session the meter did not read sent the same text as one it read.
     - Each arm's shares divide by its share base (`shareBase`): the bill of the calls that ran under the arm or
       carried one of its copies or messages. A call that carried more than one arm is in each base, so the bases and
-      the shares do not add up across arms. An arm's shares change when its calls carried another arm's copies or
-      messages, or its own rode in another arm's calls; otherwise they are 0.9.0's.
+      the shares do not add up across arms. An arm's shares change when its sessions made calls under another arm,
+      calls before their first copy included, or when its calls carried another arm's copies or messages, or its own
+      rode in another arm's calls; otherwise they are 0.9.0's.
     - A session counts under every arm it had a call under, and the output names the sessions with more than one.
 
     A session's numbers stay in one arm's row only when its counted calls, and the copies and messages those calls
@@ -74,13 +76,16 @@ under each session's last arm, and the identifier check no longer passes `1.500`
     478,099, an estimated saving of 120,492 and a net of -357,607. The per-session table, every signal count and the
     non-empty rows of `team.sentByArm` are the same too.
   - Only the per-arm split moves. Two sessions had calls under more than one arm. Each figure is a share of that
-    arm's share base:
+    arm's share base, with chars/4:
 
     | arm | load cost, 0.9.0 -> 0.10.0 | net, 0.9.0 -> 0.10.0 |
     |---|---|---|
     | brevity | 0.57% -> 0.77% | -0.45% -> -0.66% |
     | terse | 0.12% -> 0.08% | -0.04% -> +0.04% |
     | lite | 0.76% -> 0.20% | -0.55% -> -0.10% |
+
+    With the tokenizer the same rows read brevity 0.66% -> 0.90% and -0.53% -> -0.77%, terse 0.12% -> 0.08% and
+    -0.03% -> +0.05%, and lite 0.88% -> 0.20% and -0.64% -> -0.09%.
 
   - A reviewer recomputed every share base from per-call data and matched the meter with no difference. That took
     about 135,000 checks, on the fixtures cut at each of their call times and on real transcripts with both
@@ -102,8 +107,11 @@ under each session's last arm, and the identifier check no longer passes `1.500`
 
 Every message written under 0.9 decodes the same: the spec changes only the version in its title.
 
-The meter's team totals do not change. Its per-arm values change for every session whose calls, or the copies and
-messages those calls carried, were under more than one arm. Shares now divide by `shareBase`, so they no longer add
+On this project's transcripts the meter's team totals do not change. Where a received message now matches a
+different send, or none, the team's estimated saving and net, its received counts by style, a few signal flags, and
+the `--team-json` received counts and `--saving` can change; the shipped `source` fixture shows it. Per-arm values
+change for every session that made calls under more than one arm, calls before its first copy included, or whose
+calls carried copies or messages of more than one arm. Shares now divide by `shareBase`, so they no longer add
 up across arms. `team.arms` keeps every key and adds `sentTokens` and `shareBase`. `team.sentByArm` keeps its counts,
 but its empty rows follow `team.arms`. A received message whose `msg_id` names another sender than the last send with
 its text can change its arm, style and saving.
@@ -115,8 +123,10 @@ its text can change its arm, style and saving.
 
 - **Claude Code plugin users:** run `/plugin marketplace update brevity`.
 - **Meter:** re-run any per-arm comparison. Per-arm figures from 0.9.0 or earlier over a run with a session that
-  switched arms are superseded.
-- **Identifier check:** if you run it in a pipeline, check the printed `coverage` line, or pin `--legacy`.
+  switched arms or made calls before its first copy are superseded.
+- **Identifier check:** the printed `coverage` line is the same as in 0.9.0. A gate on the default or
+  `--small-numbers` can report new misses, only where a number of four or more digits is written with a `.`; pin
+  `--legacy` for the 0.7.0 coverage.
 - **Other surfaces:** projects that copy SPEC.md, the Cursor rule or the AGENTS.md block re-copy them.
 
 ## [0.9.0] - 2026-10-12
