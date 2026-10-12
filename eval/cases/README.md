@@ -39,13 +39,14 @@ claude plugin eval --eval-dir eval/cases --scaffold
   indicators only and do not count toward the score. `skill-not-used` sets `arm: both`, so it counts in both arms.
 - brevity is meant to be readable without the spec, so Claude may decode `decode-brevity-message` well without the
   plugin, and its `Δ` can be small.
-- Two graders are `llm` graders, scored by a judge model: `plain-line-1` in `encode-prose-message` and
-  `r-ready-in-full` in `opted-in-session`. A judge's verdicts vary from run to run, and two judges can disagree on
-  the same reply. Every other grader is a regex or a tool check, which gives the same verdict on the same reply
-  whatever the judge, so a verdict that wording can decide is a regex: the shape of the encoded line 1
-  (`line-1-one-sentence`), and in `decode-brevity-message` every condition (`keeps-conditions`) and the two misreadings
-  seen in no-plugin decodes, `(mine)` read as the reader's and CLEAN read as "up to date" (`mine-is-senders`,
-  `clean-not-up-to-date`). See [issue #69](https://github.com/nsalloums/brevity/issues/69).
+- One grader is an `llm` grader, scored by a judge model: `plain-line-1` in `encode-prose-message`. A judge's
+  verdicts vary from run to run, and two judges can disagree on the same reply. Every other grader is a regex or a
+  tool check, which gives the same verdict on the same reply whatever the judge, so a verdict that wording can decide
+  is a regex: the shape of the encoded line 1 (`line-1-one-sentence`); in `decode-brevity-message`, every condition
+  (`keeps-conditions`) and the two misreadings seen in no-plugin decodes, `(mine)` read as the reader's and CLEAN
+  read as "up to date" (`mine-is-senders`, `clean-not-up-to-date`); and in `opted-in-session`, the six parts of
+  `R.ready` (`r-ready-in-full`) and a changed part, such as the sender merging, another merge command or CLEAN read
+  as "up to date" (`no-changed-part`). See [issue #69](https://github.com/nsalloums/brevity/issues/69).
 - The default judge is Haiku (in Claude Code 2.1.286). Pass `--judge-model` to use another, for example
   `--judge-model sonnet`. The scores published in [issue #8](https://github.com/nsalloums/brevity/issues/8) and
   [#69](https://github.com/nsalloums/brevity/issues/69) used the default judge, with a second set under
