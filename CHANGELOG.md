@@ -35,11 +35,16 @@ numbers it used to skip.
   - `tools/idcheck.mjs` also checks, by default:
     - a number before a unit (`30-day`, `512mb`, `8080/tcp`);
     - the later numbers of `N/M` and `N:M`, except times (`118/120`);
-    - a number grouped in thousands, as one number (`1,088`, `2.637`), kept with `,`, `.` or no separator.
+    - a number grouped in thousands, as one number (`1,088`, `2.637`).
 
-    `--legacy` is unchanged (#64).
-- **Docs:** the README's "Measure your own team" says what each token column counts, and that the per-arm summary
-  files a session under its last arm (#79).
+    A number of four or more digits, grouped or not, counts as kept by the same digits with one `,` or `.`
+    separator or with none, so `1,088`, `1.088` and `1088` keep each other. That also lets `1.500` keep `1500`,
+    which reads as 1.5 in English (#81). `--legacy` is unchanged (#64).
+- **Docs:**
+  - the README's "Measure your own team" says what each token column counts, and that the per-arm summary files a
+    session under its last arm (#79);
+  - the README, eval/METHOD.md and eval/RESULTS.md describe the identifier check's wider default, and say what
+    the published 2,637 figure did not check (#64).
 
 ### Evidence
 
@@ -62,12 +67,13 @@ numbers it used to skip.
     cost, saving and net.
   - Over all of this project's transcripts, the only other differences are the new fields and 3 subscriptions,
     which drop out of the sent and delivered counts and let one more delegation prompt be flagged as corrected.
-  - On the two windows in #76, `sentTokens` gives 28,080 tokens in 73 messages (mean 385) and 20,139 in 52 (mean
-    387), exactly half of `messageTokens`.
+  - On the two windows in #76, with chars/4 as there, `sentTokens` gives 28,080 tokens in 73 messages (mean 385)
+    and 20,139 in 52 (mean 387), exactly half of `messageTokens`.
   - The change had three review passes, and its tests catch every mutant they were checked against, among them a
     mean over the wrong count, a subscription counted as a message, and failed sends in the by-arm table.
 - **Tests:** `node --test tools/*.test.mjs` gives 96 of 96 without the tokenizer and 96 of 96 with it.
-- **Plugin.** Nothing in `hooks/`, `arms/` or the skill changed.
+- **Plugin.** Nothing in `hooks/`, `arms/` or SKILL.md changed; the skill's SPEC.md changes only the version in
+  its title.
   - `claude plugin validate .` passes.
   - The four hook commands print brevity 9,277 characters in part 0 (as in 0.8.0), lite 1,461, terse 759, off the
     26-character marker, and nothing without `.brevity/`.
@@ -79,10 +85,14 @@ numbers it used to skip.
 
 Every message written under 0.8 decodes the same: the spec changes only the version in its title.
 
-The meter's JSON adds `sentTokens`, `meanSentTokens` and `team.sentByArm`, and keeps every earlier key. A script that
-reads its text output finds the column renamed `msg tokens (both ends)`. Sent, delivered and signal counts can drop
-where a session subscribed. `tools/idcheck.mjs` checks more by default, and no option gives the 0.8.0 default back:
-`--legacy` still gives the 0.7.0 coverage.
+The meter's JSON adds `sentTokens`, `meanSentTokens` and `team.sentByArm`, and keeps every earlier key. Its text
+output gains a `sent tokens` column before `msg tokens (both ends)`, the renamed `msg tokens`, so the columns after
+it move one place, and a table of sent messages by the arm each was written under follows the per-arm summary. Where
+a session subscribed, sent and delivered counts drop, and signal counts and rates can change.
+
+`tools/idcheck.mjs` checks more by default, so it can flag encodings that 0.8.0 passed. It also passes a few that
+0.8.0 flagged: a four-digit or longer number written with one separator, such as `1.500` for `1500` (#81). No option
+gives the 0.8.0 default back: `--legacy` still gives the 0.7.0 coverage.
 
 ### Upgrade
 
