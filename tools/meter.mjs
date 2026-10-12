@@ -1254,7 +1254,7 @@ export function render(r) {
     out.push('sent = SendMessage deliveries and delegation prompts; received = peer messages and delegation prompts.');
     const sentCount = t.sentBrevity + t.sentLite + t.sentTerse + t.sentProse;
     out.push(`sent tokens = the tokens of the messages sent, each counted once, at its sender: ${sentCount
-      ? `the team sent ${fmt(t.sentTokens)} in ${plural(sentCount, 'message')}, a mean length of ${fmt(t.meanSentTokens)} tokens`
+      ? `the team sent ${fmt(t.sentTokens)} in ${plural(sentCount, 'message')}, a mean length of ${plural(Math.round(t.meanSentTokens), 'token')}`
       : 'no message sent'}.`);
     out.push('msg tokens (both ends) = sent plus received tokens: a message between two measured sessions counts at each end, '
       + 'so the total counts it twice. For message lengths, use sent tokens.');

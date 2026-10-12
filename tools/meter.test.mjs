@@ -43,7 +43,8 @@
 //
 // tools/fixtures/meter/ends holds two lite sessions where every message is measured at both ends (issue #76). "lead"
 // spawns "dev" with a delegation prompt (23 tokens at chars/4); dev reports to lead (20 tokens), and lead answers it
-// (18 tokens). Then lead subscribes to dev's idle notice: a SendMessage with no message.
+// (18 tokens). Then lead subscribes to dev's idle notice twice, in the shapes real subscriptions take: a SendMessage
+// with message and content empty, and one with a summary, content empty and no message.
 //
 // Every run that checks numbers counts tokens with chars/4: run() takes `count`, and the command line gets
 // BREVITY_METER_TOKENIZER=chars/4, so the numbers hold whether or not @anthropic-ai/tokenizer is installed (issue #60).
@@ -433,6 +434,14 @@ test('a received message takes the arm and style of the sent message with the sa
   });
 });
 
+// The rows of sentByArm split the team's sent messages: they add up to its sent count and tokens.
+const sentByArmAddsUp = (r) => {
+  const rows = Object.values(r.team.sentByArm);
+  const t = r.team.total;
+  assert.deepEqual([rows.reduce((a, x) => a + x.sent, 0), rows.reduce((a, x) => a + x.sentTokens, 0)],
+    [t.sentBrevity + t.sentLite + t.sentTerse + t.sentProse, t.sentTokens]);
+};
+
 test('the per-arm summary adds up the sessions under each arm', async () => {
   const r = await arms();
   const a = r.team.arms;
@@ -466,6 +475,7 @@ test('the per-arm summary adds up the sessions under each arm', async () => {
   assert.deepEqual(Object.entries(byArm).map(([arm, x]) => [arm, x.sent, x.sentTokens]),
     [['lite', 2, 25 + 18], ['terse', 1, 16], ['off', 1, 14], ['none', 0, 0]]);
   close(byArm.lite.meanSentTokens, (25 + 18) / 2);
+  sentByArmAddsUp(r);
   assert.equal(byArm.none.meanSentTokens, null, 'with no message sent, no mean length');
   assert.match(text, /^sent messages by the arm each was written under /m);
   assert.match(text, /^arm +sent +sent tokens +tokens\/sent\nlite +2 +43 +22$/m);
@@ -487,6 +497,7 @@ test('sent tokens count each message once; msg tokens count it at each measured 
   assert.equal(t.messageTokens, 2 * t.sentTokens, 'both ends measured: every message counted twice');
   close(t.meanSentTokens, (prompt + report + answer) / 3);
   assert.deepEqual(r.team.sentByArm, { lite: { sent: 3, sentTokens: prompt + report + answer, meanSentTokens: t.meanSentTokens } });
+  sentByArmAddsUp(r);
   const text = render(r);
   assert.match(text, /^session +arm +.* +sent tokens +msg tokens \(both ends\) +est\. saving +net$/m);
   assert.match(text, /^total +6 +6,552 +2 +193 +0\/3\/0\/0 +0\/3\/0\/0 +61 +122 /m);
@@ -495,19 +506,32 @@ test('sent tokens count each message once; msg tokens count it at each measured 
   assert.match(text, /^lite +3 +61 +20$/m);
 });
 
-test('the mean length divides by the messages sent, not received or failed; with none sent, it says so', async () => {
+test('the mean length divides by the messages sent, not received or failed, by arm too; with none sent, it says so', async () => {
   // The team fixture: the hub delivers 50 and 40 tokens and a 100-token prompt, and fails to send 48; the peer sends 40.
-  // Received: the hub gets 60, the peer 30 and the prompt.
+  // Received: the hub gets 60, the peer 30 and the prompt. The fork's copies of the hub's messages are not counted.
   const r = await meter();
   const t = r.team.total;
   assert.deepEqual([t.sentBrevity + t.sentProse, t.receivedBrevity + t.receivedProse, t.failed], [4, 3, 1]);
   assert.deepEqual(messages(session(r, 'peer'), 'sent').map((m) => m.tokens), [40]);
   assert.equal(t.sentTokens, 50 + 40 + 100 + 40);
   close(t.meanSentTokens, (50 + 40 + 100 + 40) / 4);
+  assert.deepEqual(r.team.sentByArm, { brevity: { sent: 4, sentTokens: 230, meanSentTokens: 57.5 } });
+  sentByArmAddsUp(r);
   assert.match(render(r), /^sent tokens = .*: the team sent 230 in 4 messages, a mean length of 58 tokens\.$/m);
   const none = await meter('--since', '2026-01-05T11:00:00Z');
   assert.equal(none.team.total.meanSentTokens, null);
+  assert.deepEqual(none.team.sentByArm, { brevity: { sent: 0, sentTokens: 0, meanSentTokens: null } });
+  sentByArmAddsUp(none);
   assert.match(render(none), /^sent tokens = the tokens of the messages sent, each counted once, at its sender: no message sent\.$/m);
+  // The late fixture's session is under brevity, but it sent its 20-token message before it loaded a copy.
+  const early = await run(['--project', late], { count, cwd: dir });
+  assert.deepEqual(early.team.sentByArm, {
+    brevity: { sent: 0, sentTokens: 0, meanSentTokens: null }, none: { sent: 1, sentTokens: 20, meanSentTokens: 20 },
+  });
+  sentByArmAddsUp(early);
+  // One token is singular.
+  const one = { ...r, team: { ...r.team, total: { ...t, sentTokens: 4, meanSentTokens: 1 } } };
+  assert.match(render(one), /the team sent 4 in 4 messages, a mean length of 1 token\.$/m);
 });
 
 test('--saving-ratio replaces the ratio of every arm, and off still saves nothing', async () => {

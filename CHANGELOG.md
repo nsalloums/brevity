@@ -14,8 +14,10 @@ Changes waiting on `next` for the next release (see [RELEASING.md](RELEASING.md)
   the team and by the arm each message was written under (`sentTokens`, `meanSentTokens` and `team.sentByArm` in
   `--json`). The `msg tokens` column is now `msg tokens (both ends)`: it counts a message at each end, so a team
   total counts every message between measured sessions twice. A SendMessage with no message, such as a
-  `notify_when_idle` subscription, no longer counts as a sent or delivered message, so sent and delivered counts drop
-  where a session subscribed. `messageTokens` keeps its meaning (#76).
+  `notify_when_idle` subscription, is no longer a message. Where a session subscribed, its sent and delivered counts
+  drop. The quality and delegation signals no longer treat the subscription as a message, so their rates and a few
+  clarified or corrected flags can change. The `--team-json` sent counts and the `--saving` of its compare command
+  change with them. `messageTokens` keeps its meaning (#76).
 
 ## [0.8.0] - 2026-10-11
 
