@@ -1,6 +1,6 @@
 {
   "name": "brevity",
-  "version": "0.9.0",
+  "version": "0.10.0",
   "description": "Brevity codes for coding agents: a compact, public, human-auditable format for messages between agent sessions.",
   "contextFileName": "SPEC.md"
 }

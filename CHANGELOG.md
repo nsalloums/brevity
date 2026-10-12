@@ -3,6 +3,132 @@
 Every entry follows [RELEASING.md](RELEASING.md): a criticality level, why the release exists, what changed, the
 evidence, compatibility and upgrade steps. Versions follow semantic versioning read from the protocol's side.
 
+## [0.10.0] - 2026-10-12
+
+**Criticality:** normal. The meter's per-arm summary counts each call, copy and message under the arm in effect, not
+under each session's last arm, and the identifier check no longer passes `1.500` for `1500`.
+
+### Why
+
+- **#79, normal.** The per-arm summary filed each session under the arm of its last copy, with all of its calls,
+  copies, messages, savings and signals. A session that switched arms counted entirely under its last arm. On this
+  project's transcripts one session went through brevity, terse and lite, and the per-arm rows put the messages
+  written under brevity at 317 tokens (chars/4), below terse's 353, when they averaged 411. A comparison of arms
+  without windows that each hold one arm could come out in the wrong order, and this repository rotates arms to
+  compare them.
+- **#81, low.** Since 0.9.0, `tools/idcheck.mjs`'s default counted `1.500` as keeping `1500`, which reads as 1.5 in
+  English, and `2,637` or `2637` as keeping a decimal `2.637`.
+
+### Changes
+
+- **Tools:**
+  - `tools/meter.mjs`: the per-arm summary goes by the arm in effect, not by each session's last arm (#79):
+    - Each call and its bill count under the arm of the newest copy in its context, or none.
+    - Each copy's load cost counts under its own arm, also at calls under a newer arm. The skill entry's cost counts
+      under the arm of each call that bills it.
+    - Each message, with its saving and quality signals, counts under the arm it was written under. A received
+      message from a session the meter did not read, and a subagent's result, count under none.
+    - A received message takes the arm and style of its send, matched as the quality signals match it: `msg_id`, then
+      the only send with its text, then the sender's name. When several sends are left and they share an arm and
+      style, as when one session sent a text twice, it takes those. Before, it took them from the last send read with
+      the same text. A received message whose `msg_id` names another sender than that send, or whose text and name fit
+      sends of different arms, can change its arm, style and saving, and so the team's estimated saving.
+    - Matching never takes a send that logged a `msg_id` other than the message's. For the quality signals, that can
+      move or drop a flag where a session the meter did not read sent the same text as one it read.
+    - Each arm's shares divide by its share base (`shareBase`): the bill of the calls that ran under the arm or
+      carried one of its copies or messages. A call that carried more than one arm is in each base, so the bases and
+      the shares do not add up across arms. An arm's shares change when its sessions made calls under another arm,
+      calls before their first copy included, or when its calls carried another arm's copies or messages, or its own
+      rode in another arm's calls; otherwise they are 0.9.0's.
+    - A session counts under every arm it had a call under, and the output names the sessions with more than one.
+
+    A session's numbers stay in one arm's row only when its counted calls, and the copies and messages those calls
+    carried, were all under that arm. They split when the session switched arms or made calls before its first copy.
+    They also split when it still carried an earlier arm's copy or messages: after a switch, in a window that starts
+    after one, or in a transcript that continues another session. Messages received from another arm, from a session
+    the meter did not read, or from a subagent split them too. `team.arms` in `--json` keeps every key and adds
+    `sentTokens` and `shareBase`. `team.sentByArm` keeps its counts, but its rows with nothing sent follow
+    `team.arms`, so an arm can gain or lose an empty row. New keys: `callArms` and `byArm` per session, and
+    `multiArmSessions` in the totals.
+  - `tools/idcheck.mjs`, by default and with `--small-numbers`, keeps a number of four or more digits only in a form
+    that reads as the same value in English, apart from a longer number around it (`1500.5` still keeps `1500`,
+    #82). `1,088` and `1088` still keep each other, but `1.500` no longer keeps `1500`, and `2,637` or `2637` no
+    longer keep `2.637`, which may be a decimal. `2.637` and `2637` in one message are two numbers, and a dotted
+    number is now checked even when a #N or a SHA of the original carries its digits (`2.637` after `#2637`). Each
+    of these can flag an encoding that 0.9.0 passed. `--legacy` is unchanged (#81).
+- **Docs:** the README's "Measure your own team" describes how the per-arm summary attributes calls, copies and
+  messages, and what each arm's share base holds. The README, the header of `tools/idcheck.mjs` and eval/METHOD.md
+  describe the identifier check's rule for separators.
+
+### Evidence
+
+- **Identifier check.** On the private evaluation's final encodings, 268 messages, the counts are the same as 0.9.0's
+  in every mode: `--legacy` 2,637 checked and 0 missing, the default 2,686 and 2, `--small-numbers` 3,000 and 42.
+  That corpus holds no dotted number of four or more digits, so the new rule changes no verdict there. On the five
+  pilot arms the default checks 2,686 and finds 0 missing in each. The review checked the rule more widely:
+  - On about 155 synthetic pairs, every verdict that changed went from kept to missing, and each was right when
+    read in English.
+  - On 40,000 fuzzed messages, no identifier was lost and none went from missing to kept.
+  - `--legacy` gave byte-identical output in 1,872 runs over 12,000 messages.
+- **Meter.**
+  - On this project's transcripts up to 2026-10-12T19:00Z, 0.9.0 and 0.10.0 report the same team totals, with
+    chars/4 and with the tokenizer. With chars/4: 30 sessions, 2,828 calls, a bill of 89,331,607, a load cost of
+    478,099, an estimated saving of 120,492 and a net of -357,607. The per-session table, every signal count and the
+    non-empty rows of `team.sentByArm` are the same too.
+  - Only the per-arm split moves. Two sessions had calls under more than one arm. Each figure is a share of that
+    arm's share base, with chars/4:
+
+    | arm | load cost, 0.9.0 -> 0.10.0 | net, 0.9.0 -> 0.10.0 |
+    |---|---|---|
+    | brevity | 0.57% -> 0.77% | -0.45% -> -0.66% |
+    | terse | 0.12% -> 0.08% | -0.04% -> +0.04% |
+    | lite | 0.76% -> 0.20% | -0.55% -> -0.10% |
+
+    With the tokenizer the same rows read brevity 0.66% -> 0.90% and -0.53% -> -0.77%, terse 0.12% -> 0.08% and
+    -0.03% -> +0.05%, and lite 0.88% -> 0.20% and -0.64% -> -0.09%.
+
+  - A reviewer recomputed every share base from per-call data and matched the meter with no difference. That took
+    about 135,000 checks, on the fixtures cut at each of their call times and on real transcripts with both
+    tokenizers.
+  - The change had three review passes. Its tests catch all 22 mutants they were checked against, among them
+    session-arm grouping, a share over the arm's own bill, a range one call too long, and a received message matched
+    by its last text.
+- **Tests:** `node --test tools/*.test.mjs` gives 101 of 101 without the tokenizer and 101 of 101 with it.
+- **Plugin.** Nothing in `hooks/`, `arms/` or SKILL.md changed; the skill's SPEC.md changes only the version in its
+  title.
+  - `claude plugin validate .` passes.
+  - The four hook commands print brevity 9,278 characters in part 0 (one more than 0.9.0, for the version), lite
+    1,461, terse 759, off the 26-character marker, and nothing without `.brevity/`.
+  - The real `claude -p --plugin-dir` run was not repeated, because the hook did not change.
+- **Spec size:** 99 lines, 9,222 characters, 2,680 legacy tokens; only the version in the title changes.
+- **Checks:** `node scripts/release-check.mjs --base origin/main` and `node tools/build-adapters.mjs --check` pass.
+
+### Compatibility
+
+Every message written under 0.9 decodes the same: the spec changes only the version in its title.
+
+On this project's transcripts the meter's team totals do not change. Where a received message now matches a
+different send, or none, the team's estimated saving and net, its received counts by style, a few signal flags, and
+the `--team-json` received counts and `--saving` can change; the shipped `source` fixture shows it. Per-arm values
+change for every session that made calls under more than one arm, calls before its first copy included, or whose
+calls carried copies or messages of more than one arm. Shares now divide by `shareBase`, so they no longer add
+up across arms. `team.arms` keeps every key and adds `sentTokens` and `shareBase`. `team.sentByArm` keeps its counts,
+but its empty rows follow `team.arms`. A received message whose `msg_id` names another sender than the last send with
+its text can change its arm, style and saving.
+
+`tools/idcheck.mjs` can flag encodings that 0.9.0 passed, where a number of four or more digits is written with a
+`.`, and passes none that 0.9.0 flagged. `--legacy` is unchanged.
+
+### Upgrade
+
+- **Claude Code plugin users:** run `/plugin marketplace update brevity`.
+- **Meter:** re-run any per-arm comparison. Per-arm figures from 0.9.0 or earlier over a run with a session that
+  switched arms or made calls before its first copy are superseded.
+- **Identifier check:** the printed `coverage` line is the same as in 0.9.0. A gate on the default or
+  `--small-numbers` can report new misses, only where a number of four or more digits is written with a `.`; pin
+  `--legacy` for the 0.7.0 coverage.
+- **Other surfaces:** projects that copy SPEC.md, the Cursor rule or the AGENTS.md block re-copy them.
+
 ## [0.9.0] - 2026-10-12
 
 **Criticality:** normal. The meter no longer reports message sizes twice over, and the identifier check covers
