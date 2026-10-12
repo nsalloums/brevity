@@ -7,6 +7,12 @@ evidence, compatibility and upgrade steps. Versions follow semantic versioning r
 
 Changes waiting on `next` for the next release (see [RELEASING.md](RELEASING.md)).
 
+- `tools/idcheck.mjs`, by default and with `--small-numbers`, keeps a number of four or more digits only in a form
+  that reads as the same value in English, apart from a longer number around it (`1500.5` still keeps `1500`,
+  #82). `1,088` and `1088` still keep each other, but `1.500` no longer keeps `1500`, and `2,637` or `2637` no
+  longer keep `2.637`, which may be a decimal. `2.637` and `2637` in one message are two numbers, and a dotted
+  number is now checked even when a #N or a SHA of the original carries its digits (`2.637` after `#2637`). Each
+  of these can flag an encoding that 0.9.0 passed. `--legacy` is unchanged (#81).
 - `tools/meter.mjs`: the per-arm summary goes by the arm in effect, not by each session's last arm (#79). Each call
   and its bill count under the arm of the newest copy in its context, or none. Each copy's load cost counts under its
   own arm, and the skill entry's under the arm of each call that bills it. Each message, with its saving and quality
