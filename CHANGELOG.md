@@ -3,6 +3,21 @@
 Every entry follows [RELEASING.md](RELEASING.md): a criticality level, why the release exists, what changed, the
 evidence, compatibility and upgrade steps. Versions follow semantic versioning read from the protocol's side.
 
+## [Unreleased]
+
+Changes waiting on `next` for the next release (see [RELEASING.md](RELEASING.md)).
+
+- `tools/meter.mjs`: the per-arm summary goes by the arm in effect, not by each session's last arm (#79). Each call
+  and its bill count under the arm of the newest copy in its context, or none. Each copy's load cost counts under its
+  own arm, and the skill entry's under the arm of each call that bills it. Each message, with its saving and quality
+  signals, counts under the arm it was written under. A session counts under every arm it had a call under, and the
+  output names the sessions with more than one. `team.arms` in `--json` keeps every key and adds `sentTokens`. Its
+  values change for sessions that switched arms or made calls before their first copy, and for received messages:
+  those count under their sender's arm, or under none when the meter did not read the sender. A session whose calls
+  all ran under one arm, and whose received messages were written under that arm, keeps its values. New keys:
+  `callArms` and `byArm` per session, and `multiArmSessions` in the totals. Team totals and `team.sentByArm` do not
+  change.
+
 ## [0.9.0] - 2026-10-12
 
 **Criticality:** normal. The meter no longer reports message sizes twice over, and the identifier check covers

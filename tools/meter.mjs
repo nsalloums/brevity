@@ -30,8 +30,13 @@
 //   alone. One that holds "<!-- brevity SPEC.md -->" and no arm marker, from before arms, is a brevity copy. A copy
 //   costs the tokens of its rendered text. The plugin's "brevity:brevity" line in a skill listing is counted the same
 //   way, as the skill entry; spec cost, or load cost per arm, is the copies plus the skill entry.
-// - Arms. A session is under the arm of the last copy that its counted calls carried, else of its last copy, or none.
-//   The per-arm summary adds up the sessions under each arm.
+// - Arms. A session's arm, in its row, is the arm of the last copy that its counted calls carried, else of its last
+//   copy, or none. The per-arm summary goes by the arm in effect (issue #79): each counted call, with its bill, is under
+//   the arm of the newest copy in its context, or none; each copy's cost is under the copy's own arm, also at calls
+//   under a newer one; the skill entry's cost, call by call, is under the call's arm; and each message, with its
+//   saving and signals, is under the arm it was written under (see Messages), or none, as is a received message whose
+//   sender was not measured. A session counts under every arm it had a call under, and the sessions with calls under
+//   more than one are counted (multiArmSessions).
 // - Cost of a copy, call by call. While a copy is in a session's context, each call bills it at the cache read price
 //   if the call's cache read reaches past the copy's end in the prompt, and at the call's write rate otherwise: its
 //   first call, a call after an idle cache miss, or a rebuilt prefix. The write rate is the call's own mix of 5-minute
@@ -65,7 +70,7 @@
 //   Tokens (issue #76): msg tokens (messageTokens) adds what a session sent and what it received, so a message between
 //   two measured sessions counts at each end, and twice in a total. sent tokens (sentTokens) counts the delivered
 //   messages and prompts a session sent, each once; meanSentTokens divides it by how many there were. sentByArm adds
-//   them up by the arm each was written under, while the per-arm summary files a session under its own arm (issue #79).
+//   them up by the arm each was written under, as the per-arm summary does.
 // - Savings, an estimate. No prose original exists for a real message, so a message of t tokens is taken to replace
 //   prose of t / (1 - r) tokens and to save s = t x r / (1 - r). r is the ratio of its style, from the single-pass
 //   pilot in issue #26: brevity 0.154, lite 0.087, terse 0.102. Prose, and every message written under off, save
@@ -512,6 +517,8 @@ class Transcript {
     if (!call.counted) return;
 
     call.index = this.counted++;
+    // The call runs under the arm of the newest copy in its context (issue #79).
+    call.arm = this.arm() ?? 'none';
     // From the session's first call with a spec copy on, brevity is loaded; what those calls bill is also kept apart.
     if (this.loadStart === null && this.live.some((it) => it.kind === 'spec')) this.loadStart = call.index;
     call.loaded = this.loadStart !== null;
@@ -525,6 +532,8 @@ class Transcript {
       it.billed++;
       it.rate += rate;
       if (call.loaded) it.rateLoaded += rate;
+      // The skill entry has no arm of its own: each call bills it under the call's arm.
+      if (it.kind === 'skill') (it.rateByArm ??= {})[call.arm] = (it.rateByArm[call.arm] ?? 0) + rate;
       if (it.kind === 'spec') spec.push({ it, rate });
     }
     // Every copy after the oldest is a duplicate.
@@ -659,6 +668,16 @@ class Transcript {
     for (const c of calls) models[c.model] = (models[c.model] ?? 0) + 1;
     const rewrites = this.items.filter((i) => i.kind !== 'msg');
     const written = calls.map((c) => writes(c.usage));
+    // By arm (issue #79): each counted call and its bill under the call's arm, each copy's cost under the copy's arm,
+    // and the skill entry's cost under the arm of each call that billed it.
+    const byArm = {};
+    const at = (arm) => (byArm[arm] ??= { calls: 0, bill: 0, loadCost: 0 });
+    for (const c of calls) {
+      at(c.arm).calls++;
+      at(c.arm).bill += callBill(c.usage, c.model, prices);
+    }
+    for (const i of copies) at(i.arm).loadCost += i.tokens * i.rate;
+    for (const i of this.items) for (const [arm, rate] of Object.entries(i.rateByArm ?? {})) at(arm).loadCost += i.tokens * rate;
     return {
       id: this.id,
       kind: this.kind === 'subagent' ? 'subagent' : /^sdk/.test(this.entrypoint ?? '') ? 'test' : 'team',
@@ -666,6 +685,9 @@ class Transcript {
       // The arm of the last copy its counted calls carried (else of its last copy), and every arm it had, in order.
       arm: (copies.at(-1) ?? all.at(-1))?.arm ?? 'none',
       arms: [...new Set(all.map((i) => i.arm))],
+      // The arms its counted calls ran under, in order (none: no copy), and what each arm's calls and copies cost.
+      callArms: [...new Set(calls.map((c) => c.arm))],
+      byArm,
       calls: calls.length,
       callsLoaded: calls.filter((c) => c.loaded).length,
       bill,
@@ -1020,6 +1042,8 @@ function summarize(records) {
     specCostLoaded: sum('specCostLoaded'), savingLoaded: sum('savingLoaded'), netLoaded: sum('netLoaded'),
   };
   for (const key of Object.keys(t[0] ?? {})) out[key] = tsum(key);
+  // The sessions whose calls ran under more than one arm: each counts under every such arm in the per-arm summary.
+  out.multiArmSessions = records.filter((r) => r.callArms.length > 1).length;
   out.meanSentTokens = meanSent(out.sentTokens, out.sentBrevity + out.sentLite + out.sentTerse + out.sentProse);
   // Each share divides what the calls with an arm loaded billed for it by what those same calls billed in all.
   const b = out.billLoaded;
@@ -1029,30 +1053,50 @@ function summarize(records) {
   return out;
 }
 
-// The sessions under each arm (see the header) and what they add up to. Each share divides
-// by the bill of the arm's sessions.
+// What the team's calls, copies and messages add up to under each arm, by the arm in effect (see the header, issue
+// #79): a session counts under every arm it had a call under. Each share divides by the bill of the arm's calls.
 export function perArm(sessions, ratios) {
-  const arms = {};
-  const order = [...ARMS, 'none'];
-  for (const r of [...sessions].sort((a, b) => (order.indexOf(a.arm) + 1 || 99) - (order.indexOf(b.arm) + 1 || 99))) {
-    const t = r.tally;
-    const a = (arms[r.arm] ??= {
-      ratio: r.arm in ratios ? ratios[r.arm] : null, sessions: [], calls: 0, bill: 0, loadCost: 0, sent: 0, received: 0,
-      compressed: 0, saving: 0, net: 0, delivered: 0, clarified: 0, corrected: 0, resent: 0,
-      delegations: 0, delegationsStarted: 0, delegationsClarified: 0, delegationsCorrected: 0, delegationsResent: 0,
-    });
-    a.sessions.push(r.id);
-    a.calls += r.calls;
-    a.bill += r.bill;
-    a.loadCost += r.specCost;
-    a.sent += t.sentBrevity + t.sentLite + t.sentTerse + t.sentProse;
-    a.received += t.receivedBrevity + t.receivedLite + t.receivedTerse + t.receivedProse;
-    a.compressed += r.messages.filter((m) => m.counted && !m.failed && [...SENT, ...RECEIVED].includes(m.dir) && compressed(m)).length;
-    a.saving += r.saving;
-    a.net += r.net;
-    for (const k of ['delivered', ...SIGNALS, 'delegations', 'delegationsStarted', ...Object.values(DELEGATION_SIGNALS)]) a[k] += t[k];
+  const rows = {};
+  const row = (arm) => (rows[arm] ??= {
+    ratio: arm in ratios ? ratios[arm] : null, sessions: [], calls: 0, bill: 0, loadCost: 0, sent: 0, sentTokens: 0, received: 0,
+    compressed: 0, saving: 0, net: 0, delivered: 0, clarified: 0, corrected: 0, resent: 0,
+    delegations: 0, delegationsStarted: 0, delegationsClarified: 0, delegationsCorrected: 0, delegationsResent: 0,
+  });
+  for (const r of sessions) {
+    for (const arm of r.callArms) row(arm).sessions.push(r.id);
+    for (const [arm, x] of Object.entries(r.byArm)) {
+      const a = row(arm);
+      a.calls += x.calls;
+      a.bill += x.bill;
+      a.loadCost += x.loadCost;
+    }
+    // Each message under the arm it was written under; a received one under its sender's (see settle).
+    for (const m of r.messages) {
+      const exchanged = m.counted && !m.failed && [...SENT, ...RECEIVED].includes(m.dir);
+      if (!exchanged && !m.saving) continue;
+      const a = row(m.arm ?? 'none');
+      a.saving += m.saving;
+      if (!exchanged) continue;
+      if (SENT.includes(m.dir)) {
+        a.sent++;
+        a.sentTokens += m.tokens;
+      } else a.received++;
+      if (compressed(m)) a.compressed++;
+      if (m.dir === 'sent') {
+        a.delivered++;
+        for (const k of SIGNALS) if (m[k]) a[k]++;
+      } else if (m.dir === 'delegation-sent') {
+        a.delegations++;
+        if (m.started) a.delegationsStarted++;
+        for (const k of SIGNALS) if (m[k]) a[DELEGATION_SIGNALS[k]]++;
+      }
+    }
   }
+  const order = [...ARMS, 'none'];
+  const arms = Object.fromEntries(Object.entries(rows)
+    .sort(([a], [b]) => (order.indexOf(a) + 1 || 99) - (order.indexOf(b) + 1 || 99)));
   for (const a of Object.values(arms)) {
+    a.net = a.saving - a.loadCost;
     a.shareOfBill = a.bill ? { loadCost: a.loadCost / a.bill, saving: a.saving / a.bill, net: a.net / a.bill } : null;
     a.per100 = per100(a);
     a.delegationPer100 = delegationPer100(a);
@@ -1061,8 +1105,7 @@ export function perArm(sessions, ratios) {
 }
 
 // The messages the sessions sent, by the arm each was written under (none: no copy in the sender's context), with
-// their tokens and mean length. Unlike perArm, a session that switched arms counts under each (issue #79). Every arm in
-// `arms` gets a row.
+// their tokens and mean length. perArm counts them the same way. Every arm in `arms` gets a row.
 export function sentByArm(sessions, arms = {}) {
   const ms = sessions.flatMap((r) => r.messages.filter((m) => m.counted && !m.failed && SENT.includes(m.dir)));
   const order = [...ARMS, 'none'];
@@ -1276,14 +1319,20 @@ export function render(r) {
         ? `brevity ${rs.brevity}, lite ${rs.lite}, terse ${rs.terse} (the single-pass pilot, issue #26)`
         : `${r.savingRatioOverride} for brevity, lite and terse (--saving-ratio)`}; prose, and what is written under off, saves nothing.`);
 
-    out.push('', 'per arm (each session under its arm, as above, with all it sent, even under an earlier arm, issue #79; '
-      + '% = share of those sessions\' bill):');
+    out.push('', 'per arm, by the arm in effect: each call under the newest copy in its context, each copy under its own arm, '
+      + 'each message under the arm it was written under (none: no copy, or a message from a session not read; '
+      + '% = share of the bill of the arm\'s calls):');
     const share = (a, key) => (a.shareOfBill ? pct(a.shareOfBill[key]) : '-');
     out.push(table([
       ['arm', 'ratio', 'sessions', 'calls', 'bill', 'load cost', 'load %', 'sent', 'received', 'est. saving', 'saving %', 'net', 'net %'],
       ...Object.entries(r.team.arms).map(([arm, a]) => [arm, a.ratio ?? '-', fmt(a.sessions.length), fmt(a.calls), fmt(a.bill), fmt(a.loadCost),
         share(a, 'loadCost'), fmt(a.sent), fmt(a.received), fmt(a.saving), share(a, 'saving'), signed(a.net), share(a, 'net')]),
     ]));
+    const multi = r.team.sessions.filter((x) => x.callArms.length > 1);
+    out.push(`sessions = the sessions with a call under the arm: ${multi.length
+      ? `${plural(multi.length, 'session')} of ${fmt(t.sessions)} had calls under more than one arm and count under each `
+        + `(${multi.map((x) => `${x.id.slice(0, 8)}: ${x.callArms.join(', ')}`).join('; ')})`
+      : 'no session had calls under more than one arm'}.`);
 
     out.push('', 'sent messages by the arm each was written under (the newest copy in the sender\'s context; none: no copy), '
       + 'the lengths to compare arms; tokens/sent = sent tokens / sent:');
