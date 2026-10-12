@@ -343,6 +343,9 @@ test('a number grouped in thousands is one number, kept only in a form that read
   assert.deepEqual(toks('Fixed #2637 in 2.637 s'), ['ref=2637', 'num=2.637']);
   assert.deepEqual(toks('Fixed #2637 in 2,637 rows'), ['ref=2637']);
   assert.deepEqual(misses('Fixed #2637 in 2.637 s', 'Fixed #2637'), ['num=2.637']);
+  assert.deepEqual(toks('Commit 3fa2637e1 took 2.637 s'), ['sha=3fa2637e1', 'num=2.637']);
+  assert.deepEqual(toks('Commit 3fa2637e1 has 2,637 rows'), ['sha=3fa2637e1']);
+  assert.deepEqual(misses('Commit 3fa2637e1 took 2.637 s', 'Commit 3fa2637e1'), ['num=2.637']);
   // Groups have exactly three digits and the first is not 0, so versions, addresses, decimals and short lists are not
   // grouped: they read as before.
   for (const text of ['Bump to 1.2.3', 'Host 10.0.0.1', 'Ratio 0.125', 'Took 1,5 s', 'Ids 10,20,30', 'Pick 1,234,56']) {

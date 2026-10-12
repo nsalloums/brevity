@@ -8,9 +8,11 @@ evidence, compatibility and upgrade steps. Versions follow semantic versioning r
 Changes waiting on `next` for the next release (see [RELEASING.md](RELEASING.md)).
 
 - `tools/idcheck.mjs`, by default and with `--small-numbers`, keeps a number of four or more digits only in a form
-  that reads as the same value in English. `1,088` and `1088` still keep each other, but `1.500` no longer keeps
-  `1500`, and `2,637` or `2637` no longer keep `2.637`, which may be a decimal. `2.637` and `2637` in one message
-  are two numbers. `--legacy` is unchanged (#81).
+  that reads as the same value in English, apart from a longer number around it (`1500.5` still keeps `1500`,
+  #82). `1,088` and `1088` still keep each other, but `1.500` no longer keeps `1500`, and `2,637` or `2637` no
+  longer keep `2.637`, which may be a decimal. `2.637` and `2637` in one message are two numbers, and a dotted
+  number is now checked even when a #N or a SHA of the original carries its digits (`2.637` after `#2637`). Each
+  of these can flag an encoding that 0.9.0 passed. `--legacy` is unchanged (#81).
 
 ## [0.9.0] - 2026-10-12
 
