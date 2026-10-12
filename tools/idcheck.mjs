@@ -35,9 +35,13 @@
 //                   (14:30, 9:05:30: hours up to 24, then two-digit minutes and seconds), in a URL, or before a
 //                   further /path (2026/10/notes.md);
 //                 - a number grouped in thousands, with , or . throughout (1,088, 37,798,511, 2.637), is one
-//                   number. The encoding keeps it, and any number of four or more digits, with the same digits
-//                   and one separator, either one, or none: 1,088, 1.088 and 1088 all keep 1,088 and 1088. A
-//                   decimal with three places (2.637 s) is read the same way, so copying it verbatim keeps it.
+//                   number. A number of four or more digits is kept only in a form that reads as the same value
+//                   in English, apart from a longer number around it (1500.5 or 0.1500 still keeps 1500, #82):
+//                   one written bare or grouped with , by the same digits with , throughout or with none (1,088
+//                   and 1088 keep each other), and one grouped with . only by the same form, since 2.637 may be a
+//                   decimal (2.637 s). So 1.088 keeps neither 1088 nor 1,088, and 2,637 and 2637 do not keep
+//                   2.637. 1.088 and 1088 are two numbers, and 2.637 is checked even when a #2637 or a SHA
+//                   (3fa2637e1) of the original carries its digits.
 //   quoted UI     text inside «...», up to 120 characters, must appear verbatim (either «...» or "..."); a
 //                 quote written with edit markup ({old>new}, {+ins}, {-del}) counts for both its old and new text
 // Not checked: text in ordinary quotes or a longer «quote»; a number right after a letter, digit, #, ., :, / or
@@ -206,15 +210,16 @@ export function tokens(text, { legacy = false, smallNumbers = false } = {}) {
   } else nums = numbers(t, smallNumbers);
   for (const v of nums) {
     const bare = v.replace(/^[+-]/, '');
-    const digits = bare.replace(/[,.]/g, '');
+    // 1,088 is 1088, but 2.637 may be a decimal, so it keeps its dot and is never a SHA's digits or a reference.
+    const value = bare.replace(/,/g, '');
     // A one-digit number sits inside most SHAs by chance, so only longer ones are skipped for that.
-    if ((digits.length >= 2 && [...shas].some((s) => s.includes(digits))) || refs.has(digits)) continue;
+    if ((value.length >= 2 && [...shas].some((s) => s.includes(value))) || refs.has(value)) continue;
     found.push({ kind: 'num', v: bare });
   }
-  // 1,088 and 1088 are one number.
+  // 1,088 and 1088 are one number; 1.088 is another.
   const seen = new Set();
   return found.filter((f) => {
-    const k = `${f.kind}:${f.kind === 'num' ? f.v.replace(/[,.]/g, '') : f.v}`;
+    const k = `${f.kind}:${f.kind === 'num' ? f.v.replace(/,/g, '') : f.v}`;
     if (seen.has(k)) return false;
     seen.add(k);
     return true;
@@ -235,12 +240,15 @@ export function present(tok, enc, { legacy = false } = {}) {
       const e = legacy ? enc : enc.replace(/\b[0-9a-f]{7,40}\b/g, (s) => (/[0-9]/.test(s) && /[a-f]/.test(s) ? ' ' : s));
       // A year may be implied by an MM-DD date (the spec lets senders drop the current year).
       if (/^20\d\d$/.test(tok.v) && /\b\d\d-\d\d(?:T|\b)/.test(e)) return true;
-      // Outside --legacy, a number of four or more digits is kept by the same digits with one thousands separator,
-      // , or ., or none: 1,088, 1.088 and 1088 each keep 1,088 and 1088.
+      // Outside --legacy, a number of four or more digits is kept only by a separator that reads as the same value in
+      // English (a longer number around it, as in 1500.5, still keeps it: #82). Ungrouped or grouped with , it is
+      // kept by the same digits with , throughout or with none: 1,088 and 1088 keep each other, but 1.088 reads as
+      // about 1. Grouped with . (2.637), it may be a decimal, so only the same form keeps it.
       const digits = tok.v.replace(/[,.]/g, '');
       if (!legacy && tok.kind === 'num' && /^[1-9]\d{3,}$/.test(digits)) {
+        if (tok.v.includes('.')) return new RegExp(`(?<!\\d)${tok.v.replace(/\./g, '\\.')}(?!\\d|\\.\\d)`).test(e);
         const [first, ...groups] = digits.replace(/\B(?=(?:\d{3})+$)/g, ' ').split(' ');
-        return new RegExp(`(?<!\\d)${first}(?<sep>[,.]?)${groups.join('\\k<sep>')}(?!\\d|\\k<sep>\\d)`).test(e);
+        return new RegExp(`(?<!\\d)${first}(?<sep>,?)${groups.join('\\k<sep>')}(?!\\d|\\k<sep>\\d)`).test(e);
       }
       return new RegExp(`(?<!\\d)${tok.v}(?!\\d)`).test(e);
     }

@@ -274,25 +274,78 @@ test('the later numbers of N/M and N:M, but not times, URLs or paths', () => {
   assert.deepEqual(toks('Compare 12/3fa4c9e', { smallNumbers: true }), ['sha=3fa4c9e', 'num=12']);
 });
 
-test('a number grouped in thousands is one number, kept with either separator or none', () => {
+// The issue's table: original, encoding, and what the default and --legacy miss. 0.9.0's default missed none of them;
+// --legacy, like 0.8.0's default, flags all three numbers.
+const ISSUE_81 = [
+  ['latency 1500 ms', 'latency 1.500 ms', ['num=1500'], ['num=1500']],
+  ['made 1088 calls', 'made 1.088 calls', ['num=1088'], ['num=1088']],
+  ['made 1088 calls', 'made 1,088 calls', [], ['num=1088']],
+  ['latency 1.5 ms', 'latency 1.5 ms', [], []],
+];
+
+test("the issue's own table: a dot does not keep a number it would turn into a decimal (#81)", () => {
+  for (const [text, enc, def, legacy] of ISSUE_81) {
+    assert.deepEqual(misses(text, enc), def, `${text} -> ${enc}`);
+    assert.deepEqual(misses(text, enc, { smallNumbers: true }), def, `${text} -> ${enc}, --small-numbers`);
+    assert.deepEqual(misses(text, enc, { legacy: true }), legacy, `${text} -> ${enc}, --legacy`);
+  }
+  // 1.5 is not checked: its digits are one-digit numbers, and the 5 follows a dot.
+  assert.deepEqual(toks('latency 1.5 ms'), []);
+  const r = cli('latency 1500 ms', 'latency 1.500 ms');
+  assert.equal(r.status, 1);
+  assert.deepEqual(r.lines, ['m1: num=1500']);
+});
+
+test('a number grouped in thousands is one number, kept only in a form that reads as the same value', () => {
   assert.deepEqual(toks('Scanned 1,088 files and 37,798,511 rows; 2.637 in a dot locale'), ['num=1,088', 'num=37,798,511', 'num=2.637']);
   // 0.7.0 read a grouped number from its last group, or from nothing after a dot.
   assert.deepEqual(toks('Scanned 1,088 files and 37,798,511 rows; 2.637 in a dot locale', { legacy: true }), ['num=088', 'num=37', 'num=798', 'num=511']);
-  for (const enc of ['scanned 1,088', 'scanned 1.088', 'scanned 1088']) assert.deepEqual(misses('Scanned 1,088 files', enc), [], enc);
-  for (const enc of ['read 2,637 rows', 'read 2637 rows', 'read 2.637 rows']) assert.deepEqual(misses('Read 2.637 rows', enc), [], enc);
+
+  // An ungrouped number of four or more digits is kept by the same digits, bare or grouped with , throughout.
+  for (const enc of ['scanned 1088 files', 'scanned 1,088 files', 'scanned 1088.', '(1,088)']) assert.deepEqual(misses('Scanned 1088 files', enc), [], enc);
+  for (const enc of ['build 1234567 ok', 'build 1,234,567 ok']) assert.deepEqual(misses('Build 1234567 passed', enc), [], enc);
+  // A dot reads as a decimal point, so 1.088 and 1.234.567 do not keep it; nor do other digits, a longer number or
+  // mixed grouping.
+  for (const enc of ['scanned 1.088 files', 'scanned 1089 files', 'scanned 21088', 'scanned 1,088,000', 'scanned 10,88', 'scanned 1.1 k files']) {
+    assert.deepEqual(misses('Scanned 1088 files', enc), ['num=1088'], enc);
+  }
+  for (const enc of ['build 1.234.567 ok', 'build 1,234567 ok', 'build 1234,567 ok', 'build 1,234.567 ok']) {
+    assert.deepEqual(misses('Build 1234567 passed', enc), ['num=1234567'], enc);
+  }
+
+  // A number grouped with , is kept verbatim or by its bare digits, never by a dot.
+  for (const enc of ['scanned 1,088', 'scanned 1088']) assert.deepEqual(misses('Scanned 1,088 files', enc), [], enc);
   assert.deepEqual(misses('Rows 37,798,511', 'rows 37798511'), []);
-  // A plain number of four or more digits is kept by its grouped form too.
-  assert.deepEqual(misses('Scanned 1088 files', 'scanned 1,088'), []);
-  assert.deepEqual(misses('Build 1234567 passed', 'build 1.234.567 ok'), []);
-  // Other digits, a longer number, a rounded decimal or mixed separators do not keep it.
-  assert.deepEqual(misses('Scanned 1,088 files', 'scanned 1,000 files'), ['num=1,088']);
-  assert.deepEqual(misses('Scanned 1,088 files', 'scanned 1,088,000 files'), ['num=1,088']);
-  assert.deepEqual(misses('Scanned 1,088 files', 'scanned 21,088 files'), ['num=1,088']);
-  assert.deepEqual(misses('Read 2.637 rows', 'read 2.64 rows'), ['num=2.637']);
-  assert.deepEqual(misses('Rows 37,798,511', 'rows 37,798.511'), ['num=37,798,511']);
-  assert.deepEqual(misses('Rows 37,798,511', 'rows 37,798'), ['num=37,798,511']);
-  // 1,088 and 1088 are one number.
+  for (const enc of ['scanned 1.088', 'scanned 1,000 files', 'scanned 1,088,000 files', 'scanned 21,088 files', 'scanned 10,88 files']) {
+    assert.deepEqual(misses('Scanned 1,088 files', enc), ['num=1,088'], enc);
+  }
+  for (const enc of ['rows 37.798.511', 'rows 37,798.511', 'rows 37,798', 'rows 37798,511']) assert.deepEqual(misses('Rows 37,798,511', enc), ['num=37,798,511'], enc);
+
+  // A number grouped with . may be a decimal (2.637 s) or a grouping from another locale, so only the same form keeps
+  // it: in English, 2,637 and 2637 read as about a thousand times more than 2.637.
+  for (const enc of ['took 2.637 s', 'took 2.637s', '(2.637)']) assert.deepEqual(misses('Took 2.637 s', enc), [], enc);
+  for (const enc of ['took 2,637 s', 'took 2637 s', 'took 2.64 s', 'took 2.6370 s', 'took 12.637 s', 'took 2.637.5 s', 'took 2.638 s']) {
+    assert.deepEqual(misses('Took 2.637 s', enc), ['num=2.637'], enc);
+  }
+  assert.deepEqual(misses('Rows 37.798.511', 'rows 37.798.511'), []);
+  for (const enc of ['rows 37,798,511', 'rows 37798511', 'rows 37.798,511']) assert.deepEqual(misses('Rows 37.798.511', enc), ['num=37.798.511'], enc);
+  assert.deepEqual(misses('Took 2.637 s', 'took 2,637 s', { smallNumbers: true }), ['num=2.637']);
+  // --legacy never read 2.637 as one number, so its 637 is not checked there.
+  assert.deepEqual(misses('Took 2.637 s', 'took 2,637 s', { legacy: true }), []);
+
+  // 1,088 and 1088 are one number; 1.088 is another, and is not a reference's or a SHA's digits.
   assert.deepEqual(toks('1088 rows, then 1,088 rows'), ['num=1088']);
+  assert.deepEqual(toks('2637 rows, then 2.637 s'), ['num=2637', 'num=2.637']);
+  assert.deepEqual(toks('1,088 rows, then 1.088 s'), ['num=1,088', 'num=1.088']);
+  assert.deepEqual(misses('2637 rows, then 2.637 s', '2637 rows'), ['num=2.637']);
+  assert.deepEqual(misses('2637 rows, then 2.637 s', '2.637 s'), ['num=2637']);
+  assert.deepEqual(misses('2637 rows, then 2.637 s', '2637 rows, 2.637 s'), []);
+  assert.deepEqual(toks('Fixed #2637 in 2.637 s'), ['ref=2637', 'num=2.637']);
+  assert.deepEqual(toks('Fixed #2637 in 2,637 rows'), ['ref=2637']);
+  assert.deepEqual(misses('Fixed #2637 in 2.637 s', 'Fixed #2637'), ['num=2.637']);
+  assert.deepEqual(toks('Commit 3fa2637e1 took 2.637 s'), ['sha=3fa2637e1', 'num=2.637']);
+  assert.deepEqual(toks('Commit 3fa2637e1 has 2,637 rows'), ['sha=3fa2637e1']);
+  assert.deepEqual(misses('Commit 3fa2637e1 took 2.637 s', 'Commit 3fa2637e1'), ['num=2.637']);
   // Groups have exactly three digits and the first is not 0, so versions, addresses, decimals and short lists are not
   // grouped: they read as before.
   for (const text of ['Bump to 1.2.3', 'Host 10.0.0.1', 'Ratio 0.125', 'Took 1,5 s', 'Ids 10,20,30', 'Pick 1,234,56']) {
@@ -379,6 +432,7 @@ test('the default coverage adds to the legacy one and never drops a token', () =
     ...MESSAGES.map((m) => m.text), ISSUE, ISSUE_64, 'See https://example.com:8080/src/a.ts:9 and #1234',
     'Head abc1234, 3 tests, v1.2.3 and 2026-10-12 at 14:30', 'foo.py:12.ts:34 and «q 5»', 'C#7 &#39; #3b82f6 #12ab34',
     'Keep 14d, 8080/tcp, 12ab, 0xff, 3/5 and 16:9 at 9:05:30', 'Id 12345678-1234-5678-9abc-def012345678 on 10.0.0.1:8080/health',
+    '#2637 took 2.637 s for 2637 rows at 1500 ms',
   ];
   for (const text of texts) {
     const legacy = toks(text, { legacy: true });
