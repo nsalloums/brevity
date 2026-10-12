@@ -440,7 +440,8 @@ write their encodings as `[{"id": "m001", "enc": "..."}]`. `measure.mjs` counts 
 `@anthropic-ai/tokenizer` if it is installed, otherwise characters / 4). `idcheck.mjs` checks, deterministically,
 that every SHA, #N, file:line, number of 10 or more and «quote» of each original survives in its encoding,
 including numbers before a unit (`30-day`), after `N/` or `N:` (`118/120`, not the minutes of `14:30`) and grouped
-in thousands (`1,088` or `2.637`, kept as `1,088`, `1.088` or `1088`). The `coverage` line in its output names what
+in thousands (`1,088` or `2.637`). `1,088` and `1088` keep each other, but `1.088` keeps neither, since it reads
+as a decimal, and `2.637`, which may be one, is kept only as written. The `coverage` line in its output names what
 it checked, its header lists the exceptions, and `--small-numbers` adds numbers below 10. Keep real messages out of
 version control.
 

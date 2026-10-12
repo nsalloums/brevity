@@ -123,9 +123,10 @@ A synthetic message and its gold facts, with the rubric clause each falls under:
     - the later numbers of `N/M` and `N:M` (the 120 in `118/120`, `16:9`), except the minutes and seconds of a time
       (`14:30`), a pair inside a URL, or one followed by a further `/path`;
     - a number grouped in thousands with `,` or `.` throughout (`1,088`, `37,798,511`, `2.637`), read as one
-      number. The encoding keeps it, and any number of four or more digits, with the same digits and one
-      separator, either one, or none: `1,088`, `1.088` and `1088` all count. A three-place decimal (`2.637 s`)
-      reads the same way, so a verbatim copy keeps it;
+      number. A number of four or more digits is kept only in a form that reads as the same value in English:
+      written bare or with `,`, by the same digits bare or with `,` throughout (`1,088` and `1088` keep each
+      other); grouped with `.`, which may be a decimal (`2.637 s`), only by the same form. So `1.088` keeps
+      neither `1088` nor `1,088`;
   - text inside «...», up to 120 characters.
 
   The output's `coverage` line names what the run checked, and the header of `tools/idcheck.mjs` lists every
