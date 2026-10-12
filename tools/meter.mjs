@@ -61,6 +61,9 @@
 //   line after its first starts with a SPEC.md section 3 verb (DO, NO, REPLY, ASK, ASKn, An, WILL, DONE, IF, HOLD, GO,
 //   DEC, FIX, WARN, WHY, CHK, FILES, OWN, TELL, ORDER, NUM, HDR, MERGED, READY, ACK), and prose if not. A received
 //   message takes the arm and style of the sent message with the same text, when a measured transcript sent it.
+//   Tokens (issue #76): msg tokens (messageTokens) adds what a session sent and what it received, so a message between
+//   two measured sessions counts at each end, and twice in a total. sent tokens (sentTokens) counts the delivered
+//   messages and prompts a session sent, each once; meanSentTokens divides it by how many there were.
 // - Savings, an estimate. No prose original exists for a real message, so a message of t tokens is taken to replace
 //   prose of t / (1 - r) tokens and to save s = t x r / (1 - r). r is the ratio of its style, from the single-pass
 //   pilot in issue #26: brevity 0.154, lite 0.087, terse 0.102. Prose, and every message written under off, save
@@ -971,7 +974,10 @@ function tally(r) {
     receivedProse: styled(received, 'prose'),
     subagentPrompts: of(['subagent-prompt']).length,
     handbacks: of(['handback']).length,
+    // A message between two measured sessions is in the sender's tally and the receiver's: messageTokens counts it at
+    // each end, so a team total counts it twice (issue #76). sentTokens counts each message once, at the sender.
     messageTokens: [...sent, ...received].reduce((a, m) => a + m.tokens, 0),
+    sentTokens: sent.reduce((a, m) => a + m.tokens, 0),
     brevityTokens: [...sent, ...received].filter((m) => m.style === 'brevity').reduce((a, m) => a + m.tokens, 0),
     // The quality signals, heuristics: of the SendMessage deliveries, how many were clarified, corrected or resent.
     delivered: deliveries.length,
@@ -986,6 +992,9 @@ function tally(r) {
     delegationsResent: prompts.filter((m) => m.resent).length,
   };
 }
+
+// The mean length of a sent message, or null without any.
+const meanSent = (tokens, n) => (n ? tokens / n : null);
 
 const SIGNALS = ['clarified', 'corrected', 'resent'];
 // The tally key of each delegation signal.
@@ -1007,6 +1016,7 @@ function summarize(records) {
     specCostLoaded: sum('specCostLoaded'), savingLoaded: sum('savingLoaded'), netLoaded: sum('netLoaded'),
   };
   for (const key of Object.keys(t[0] ?? {})) out[key] = tsum(key);
+  out.meanSentTokens = meanSent(out.sentTokens, out.sentBrevity + out.sentLite + out.sentTerse + out.sentProse);
   // Each share divides what the calls with an arm loaded billed for it by what those same calls billed in all.
   const b = out.billLoaded;
   out.shareOfLoadedBill = b ? { specCost: out.specCostLoaded / b, saving: out.savingLoaded / b, net: out.netLoaded / b } : null;
@@ -1023,7 +1033,7 @@ export function perArm(sessions, ratios) {
   for (const r of [...sessions].sort((a, b) => (order.indexOf(a.arm) + 1 || 99) - (order.indexOf(b.arm) + 1 || 99))) {
     const t = r.tally;
     const a = (arms[r.arm] ??= {
-      ratio: r.arm in ratios ? ratios[r.arm] : null, sessions: [], calls: 0, bill: 0, loadCost: 0, sent: 0, received: 0,
+      ratio: r.arm in ratios ? ratios[r.arm] : null, sessions: [], calls: 0, bill: 0, loadCost: 0, sent: 0, sentTokens: 0, received: 0,
       compressed: 0, saving: 0, net: 0, delivered: 0, clarified: 0, corrected: 0, resent: 0,
       delegations: 0, delegationsStarted: 0, delegationsClarified: 0, delegationsCorrected: 0, delegationsResent: 0,
     });
@@ -1032,6 +1042,7 @@ export function perArm(sessions, ratios) {
     a.bill += r.bill;
     a.loadCost += r.specCost;
     a.sent += t.sentBrevity + t.sentLite + t.sentTerse + t.sentProse;
+    a.sentTokens += t.sentTokens;
     a.received += t.receivedBrevity + t.receivedLite + t.receivedTerse + t.receivedProse;
     a.compressed += r.messages.filter((m) => m.counted && !m.failed && [...SENT, ...RECEIVED].includes(m.dir) && compressed(m)).length;
     a.saving += r.saving;
@@ -1039,6 +1050,7 @@ export function perArm(sessions, ratios) {
     for (const k of ['delivered', ...SIGNALS, 'delegations', 'delegationsStarted', ...Object.values(DELEGATION_SIGNALS)]) a[k] += t[k];
   }
   for (const a of Object.values(arms)) {
+    a.meanSentTokens = meanSent(a.sentTokens, a.sent);
     a.shareOfBill = a.bill ? { loadCost: a.loadCost / a.bill, saving: a.saving / a.bill, net: a.net / a.bill } : null;
     a.per100 = per100(a);
     a.delegationPer100 = delegationPer100(a);
@@ -1212,16 +1224,20 @@ export function render(r) {
     const split = styles.map((s) => s[0].toLowerCase()).join('/');
     const counts = (m, dir) => styles.map((s) => m[`${dir}${s}`]).join('/');
     const head = ['session', ...(r.titles ? ['title'] : []), 'arm', 'calls', 'bill', 'copies', 'load cost', `sent ${split}`, `received ${split}`,
-      'msg tokens', 'est. saving', 'net'];
+      'sent tokens', 'msg tokens (both ends)', 'est. saving', 'net'];
     const row = (x, name, title, arm) => {
       const m = x.tally ?? x;
       return [name, ...(r.titles ? [title ?? ''] : []), arm, fmt(x.calls), fmt(x.bill), fmt(x.copies), fmt(x.specCost), counts(m, 'sent'),
-        counts(m, 'received'), fmt(m.messageTokens), fmt(x.saving), signed(x.net)];
+        counts(m, 'received'), fmt(m.sentTokens), fmt(m.messageTokens), fmt(x.saving), signed(x.net)];
     };
     out.push(table([head, ...r.team.sessions.map((s) => row(s, s.id.slice(0, 8), s.title, s.arm)), row(t, 'total', '', '')], r.titles ? 3 : 2));
     out.push('arm = the arm of the last copy the session\'s counted calls carried, else of its last copy (none: no copy).');
     out.push(`${split} = ${styles.map((s) => s.toLowerCase()).join('/')}.`);
     out.push('sent = SendMessage deliveries and delegation prompts; received = peer messages and delegation prompts.');
+    out.push(`sent tokens = the tokens of the messages sent, each counted once, at its sender: the team sent ${fmt(t.sentTokens)} `
+      + `in ${plural(t.sentBrevity + t.sentLite + t.sentTerse + t.sentProse, 'message')}, a mean length of ${fmt(t.meanSentTokens)} tokens.`);
+    out.push('msg tokens (both ends) = sent plus received tokens: a message between two measured sessions counts at each end, '
+      + 'so the total counts it twice. For message lengths, use sent tokens.');
     if (t.billLoaded) {
       const s = t.shareOfLoadedBill;
       out.push(`with an arm loaded (each session from its first copy on): ${plural(t.callsLoaded, 'call')}, bill ${fmt(t.billLoaded)}; `
@@ -1240,12 +1256,14 @@ export function render(r) {
         ? `brevity ${rs.brevity}, lite ${rs.lite}, terse ${rs.terse} (the single-pass pilot, issue #26)`
         : `${r.savingRatioOverride} for brevity, lite and terse (--saving-ratio)`}; prose, and what is written under off, saves nothing.`);
 
-    out.push('', 'per arm (each session under its arm, as above; % = share of those sessions\' bill):');
+    out.push('', 'per arm (each session under its arm, as above; tokens/sent = sent tokens / sent; % = share of those sessions\' bill):');
     const share = (a, key) => (a.shareOfBill ? pct(a.shareOfBill[key]) : '-');
     out.push(table([
-      ['arm', 'ratio', 'sessions', 'calls', 'bill', 'load cost', 'load %', 'sent', 'received', 'est. saving', 'saving %', 'net', 'net %'],
+      ['arm', 'ratio', 'sessions', 'calls', 'bill', 'load cost', 'load %', 'sent', 'sent tokens', 'tokens/sent', 'received', 'est. saving',
+        'saving %', 'net', 'net %'],
       ...Object.entries(r.team.arms).map(([arm, a]) => [arm, a.ratio ?? '-', fmt(a.sessions.length), fmt(a.calls), fmt(a.bill), fmt(a.loadCost),
-        share(a, 'loadCost'), fmt(a.sent), fmt(a.received), fmt(a.saving), share(a, 'saving'), signed(a.net), share(a, 'net')]),
+        share(a, 'loadCost'), fmt(a.sent), fmt(a.sentTokens), fmt(a.meanSentTokens), fmt(a.received), fmt(a.saving), share(a, 'saving'),
+        signed(a.net), share(a, 'net')]),
     ]));
 
     const s = r.signals;

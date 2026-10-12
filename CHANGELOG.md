@@ -10,6 +10,10 @@ Changes waiting on `next` for the next release (see [RELEASING.md](RELEASING.md)
 - `tools/idcheck.mjs` also checks, by default, a number before a unit (`30-day`, `512mb`, `8080/tcp`), the later
   numbers of `N/M` and `N:M` except times (`118/120`), and a number grouped in thousands as one number (`1,088`,
   `2.637`), kept with `,`, `.` or no separator. `--legacy` is unchanged (#64).
+- `tools/meter.mjs` reports `sent tokens`, which counts each message once, with the mean length per sent message, for
+  the team and per arm (`sentTokens` and `meanSentTokens` in `--json`). The `msg tokens` column is now
+  `msg tokens (both ends)`: it counts a message at each end, so a team total counts every message between measured
+  sessions twice. `messageTokens` and the savings are unchanged (#76).
 
 ## [0.8.0] - 2026-10-11
 

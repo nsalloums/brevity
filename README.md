@@ -177,9 +177,17 @@ It prints a table with one row per session: its arm, its model calls, its bill i
 copies that the hook injected, and their load cost. That cost is priced call by call, so it includes copies written
 again after an idle cache miss, re-injections after a compaction, and duplicates after a resume. The row also gives
 the messages the session sent and received, by style (brevity, lite, terse or prose), their tokens, the estimated
-saving and the net. Below the table come the team's shares of the bill, how often and at what cost copies were
-written again, a summary per arm (sessions, calls, bill, load cost, messages, estimated saving, net and their shares
-of the bill), and each run of duplicated copies; `--json` adds each session's drops by compaction and resume.
+saving and the net. Sent messages are SendMessage deliveries and delegation prompts. Two columns count tokens:
+
+- `sent tokens` counts each message the session sent, once. Divide it by the messages sent for their mean length.
+- `msg tokens (both ends)` adds the messages the session received. A message between two sessions that the meter
+  reads counts at each end, so the team total counts it twice. Use `sent tokens` for message lengths.
+
+The estimated saving counts nothing twice: each end saves on its own calls. Below the table come the team's mean
+length per sent message, its shares of the bill, how often and at what cost copies were written again, a summary per
+arm (sessions, calls, bill, load cost, messages sent with their tokens and mean length, messages received, estimated
+saving, net and their shares of the bill), and each run of duplicated copies. In `--json` the counts are
+`sentTokens`, `meanSentTokens` and `messageTokens`, and each session's drops by compaction and resume are added.
 
 The saving is an estimate, because a real message has no prose original to compare with. Each arm's ratio comes
 from the single-pass pilot: brevity 0.154, lite 0.087 and terse 0.102. Messages written under off save nothing, and
