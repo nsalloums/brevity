@@ -38,7 +38,9 @@ saves less and loses more: see [Single writing pass](#single-writing-pass-pilot-
   which `--legacy` still runs: SHAs, #N of two or more digits, the line numbers of file:line in `.ts`, `.tsx`,
   `.js`, `.jsx`, `.mjs`, `.md`, `.sql`, `.json`, `.yaml`, `.yml` and `.css` files, numbers of two or more digits
   and «quotes». It did not check a one-digit #N or number, the -M of a +N/-M diffstat, or file:line in other file
-  types ([#56](https://github.com/nsalloums/brevity/issues/56)).
+  types ([#56](https://github.com/nsalloums/brevity/issues/56)). Nor did it check a number before a unit with a
+  letter a-f (`30-day`, `512mb`) or after a slash (the 120 in `118/120`), and it read a number with thousands
+  separators from its last group (`4,215` as 215) ([#64](https://github.com/nsalloums/brevity/issues/64)).
 - **The holdout saved about as much as the corpus** (23.8% vs 25.4%), but it is not a sealed test. Its 39 messages
   were written after the spec and the dictionary, then went through all nine passes with the rest while the spec
   was revised between passes ([METHOD.md](METHOD.md#2-build-the-corpus)).

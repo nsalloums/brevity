@@ -27,14 +27,25 @@
 //                 +N/-M diffstat of that size, including the -M; with --small-numbers, of any size. A 20xx
 //                 year counts as present when the encoding carries an MM-DD date, since the spec lets the
 //                 current year be implied. Outside --legacy, a digit run inside a SHA of the encoding does
-//                 not count as the number (3fa4c9e does not keep views.py:4).
+//                 not count as the number (3fa4c9e does not keep views.py:4), and:
+//                 - a number before a unit counts, whether the unit is glued to it or follows - or / (30-day,
+//                   512mb, 14d, 8080/tcp). Letters that read as hex still drop it: two or more letters a-f
+//                   glued (12ab), only letters a-f after - or / (1234-abcd), 0x (0xff), or a SHA (1234567d);
+//                 - the later numbers of N/M and N:M count (the 120 in 118/120, 3/5, 16:9), except in a time
+//                   (14:30, 9:05:30: hours up to 24, then two-digit minutes and seconds), in a URL, or before a
+//                   further /path (2026/10/notes.md);
+//                 - a number grouped in thousands, with , or . throughout (1,088, 37,798,511, 2.637), is one
+//                   number. The encoding keeps it, and any number of four or more digits, with the same digits
+//                   and one separator, either one, or none: 1,088, 1.088 and 1088 all keep 1,088 and 1088. A
+//                   decimal with three places (2.637 s) is read the same way, so copying it verbatim keeps it.
 //   quoted UI     text inside «...», up to 120 characters, must appear verbatim (either «...» or "..."); a
 //                 quote written with edit markup ({old>new}, {+ins}, {-del}) counts for both its old and new text
 // Not checked: text in ordinary quotes or a longer «quote»; a number right after a letter, digit, #, ., :, / or
-// - (v2, the 30 in 14:30, a port in localhost:3000, the 120 in 118/120, the 10 in 2026-10-11) unless it is a
-// file:line or the -M of +N/-M; a number followed in the same word by a letter a-f (hex such as 1234abcd, but
-// also 30-day, 512mb or 42-line); a number with a thousands separator, which is read from its last group (1,204
-// as 204); a file without an extension (Makefile:12, .env:3); #L42 anchors; owners, conditions and requests.
+// - (v2, the 30 in 14:30, a port in localhost:3000, the 10 in 2026-10-11) unless it is a file:line, the -M of
+// +N/-M or a later number of N/M or N:M; a number followed in the same word by a letter a-f (hex such as 1234abcd)
+// unless it is a number before a unit; a file without an extension (Makefile:12, .env:3); #L42 anchors; owners,
+// conditions and requests. --legacy also skips 30-day, 512mb, 42-line and the 120 in 118/120, and reads a number
+// with a thousands separator from its last group (1,204 as 204).
 //
 // --legacy runs the coverage of brevity 0.7.0 and earlier, which the published 2,637 identifiers used: #N of two
 // or more digits, file:line for the 11 extensions above only, no -M of +N/-M, and none of the "outside --legacy"
@@ -61,7 +72,7 @@ export function coverage({ legacy = false, smallNumbers = false } = {}) {
     return `legacy (brevity 0.7.0): SHAs (9-character prefix), #N of 2+ digits and PR/issue URLs, file:line for .${LEGACY_EXT.join(' .')}, numbers and diffstats of 2+ digits but not the -M of +N/-M, «quotes» of up to 120 characters`;
   }
   const size = smallNumbers ? 'of any size' : 'of 2+ digits';
-  return `SHAs (9-character prefix), #N of 1+ digits and PR/issue URLs, file:line for any extension of 1-8 letters and digits except hosts, numbers and +N/-M diffstats ${size}, «quotes» of up to 120 characters`;
+  return `SHAs (9-character prefix), #N of 1+ digits and PR/issue URLs, file:line for any extension of 1-8 letters and digits except hosts, numbers and +N/-M diffstats ${size}, also before a unit (30-day, 512mb), after N/ or N: except times (118/120) and grouped in thousands (1,088 or 2.637), «quotes» of up to 120 characters`;
 }
 
 const norm = (s) => s.replace(/[\u2212\u2013\u2014]/g, '-').replace(/[\u00A0\u202F]/g, ' ');
@@ -100,6 +111,67 @@ function fileLine(t, m) {
   return !scheme || scheme[1].toLowerCase() === 'file';
 }
 
+// A number as written: grouped in thousands with one separator throughout (1,088, 37.798.511), or a run of digits.
+const NUM = String.raw`[1-9]\d{0,2}(?:,\d{3})+(?!\d|,\d)|[1-9]\d{0,2}(?:\.\d{3})+(?!\d|\.\d)|\d+`;
+const SIGNED_NUM = new RegExp(String.raw`[+-]?(?:${NUM})`, 'g');
+// A number right after one of these is part of something else: v2, the 10 in 2026-10-11, a.py:42, #7.
+const JOINED = /[\w#.:/-]/;
+
+// Whether the number that ends at index i stands as a number rather than inside hex. 0.7.0 wants no letter a-f in
+// the rest of the word, which also drops quantities (30-day, 512mb, 8080/tcp). Outside --legacy a number also stands
+// before a unit, glued or after - or /, and before /N or /-N, whose second number is judged by itself. Letters that
+// read as hex still drop it: 12ab, 1234-abcd, 0xff, or a SHA such as 1234567d.
+function stands(t, i, digits) {
+  const rest = t.slice(i);
+  if (!/^[\w:/.-]*[a-f]/.test(rest) || /^\/-?\d/.test(rest)) return true;
+  const unit = rest.match(/^([-/]?)([A-Za-z]+)(?![A-Za-z\d_])/);
+  if (!unit) return false;
+  const [, sep, letters] = unit;
+  if (/^[a-f]+$/.test(letters) && (sep || letters.length > 1)) return false;
+  return Boolean(sep) || !(/^[\da-f]{7,40}$/.test(digits + letters) || (digits === '0' && /^x/i.test(letters)));
+}
+
+// The numbers that the default coverage checks, in the order they appear: standalone numbers, the -M of +N/-M, and
+// the later numbers of N/M and N:M.
+function numbers(t, smallNumbers) {
+  const ms = [];
+  for (const m of t.matchAll(SIGNED_NUM)) {
+    const sign = /^[+-]/.test(m[0]) ? m[0][0] : '';
+    const free = m.index === 0 || !JOINED.test(t[m.index - 1]);
+    const v = m[0].slice(sign.length);
+    // A + never joins: 0.7.0 read the 12 of v2+12 as a number, but not as the N of a diffstat.
+    ms.push({
+      s: m.index, e: m.index + m[0].length, sign, v, digits: v.replace(/[,.]/g, ''),
+      alone: sign === '+' || free, plus: sign === '+' && free,
+    });
+  }
+  const size = (x) => smallNumbers || x.digits.length >= 2;
+  const out = [];
+  const chains = [];
+  ms.forEach((x, k) => {
+    const p = ms[k - 1];
+    const sep = p && p.e === x.s - 1 ? t[x.s - 1] : null;
+    if (x.alone) {
+      x.chain = [x];
+      chains.push(x.chain);
+      if (size(x) && stands(t, x.e, x.digits)) out.push(x);
+    } else if (x.sign === '-' && sep === '/' && p.plus) {
+      if (size(x) && stands(t, x.e, x.digits)) out.push(x);
+    } else if (!x.sign && (sep === '/' || sep === ':') && p.chain) {
+      x.chain = p.chain;
+      x.chain.push(x);
+    }
+  });
+  for (const [head, ...rest] of chains) {
+    if (!rest.length || !stands(t, head.e, head.digits)) continue;
+    const last = rest[rest.length - 1];
+    if (wordBefore(t, head.s).includes('://') || t[last.e] === '/') continue;
+    if (/^\d{1,2}(?::[0-5]\d){1,2}$/.test(t.slice(head.s + head.sign.length, last.e)) && +head.v <= 24) continue;
+    for (const x of rest) if (size(x) && stands(t, x.e, x.digits)) out.push(x);
+  }
+  return out.sort((a, b) => a.s - b.s).map((x) => x.v);
+}
+
 export function tokens(text, { legacy = false, smallNumbers = false } = {}) {
   const t = norm(text);
   const found = [];
@@ -127,22 +199,26 @@ export function tokens(text, { legacy = false, smallNumbers = false } = {}) {
     }
   }
   for (const m of t.matchAll(/«([^»]{1,120})»/g)) found.push({ kind: 'quote', v: m[1] });
-  const num = smallNumbers ? /(?<![\w#.:/-])([+-]?\d+)(?![\w:/.-]*[a-f])/g : /(?<![\w#.:/-])([+-]?\d{2,})(?![\w:/.-]*[a-f])/g;
-  const nums = [...t.matchAll(num)].map((m) => m[1]);
-  // The -M of +N/-M follows a slash, which the pattern above skips. N may have thousands separators.
-  if (!legacy) {
-    for (const m of t.matchAll(/(?<![\w#.:/-])\+(?:\d{1,3}(?:,\d{3})+|\d+)\/-(\d+)(?!\d|,\d)(?![\w:/.-]*[a-f])/g)) {
-      if (smallNumbers || m[1].length >= 2) nums.push(m[1]);
-    }
-  }
+  let nums;
+  if (legacy) {
+    const num = smallNumbers ? /(?<![\w#.:/-])([+-]?\d+)(?![\w:/.-]*[a-f])/g : /(?<![\w#.:/-])([+-]?\d{2,})(?![\w:/.-]*[a-f])/g;
+    nums = [...t.matchAll(num)].map((m) => m[1]);
+  } else nums = numbers(t, smallNumbers);
   for (const v of nums) {
     const bare = v.replace(/^[+-]/, '');
+    const digits = bare.replace(/[,.]/g, '');
     // A one-digit number sits inside most SHAs by chance, so only longer ones are skipped for that.
-    if ((bare.length >= 2 && [...shas].some((s) => s.includes(bare))) || refs.has(bare)) continue;
+    if ((digits.length >= 2 && [...shas].some((s) => s.includes(digits))) || refs.has(digits)) continue;
     found.push({ kind: 'num', v: bare });
   }
+  // 1,088 and 1088 are one number.
   const seen = new Set();
-  return found.filter((f) => { const k = `${f.kind}:${f.v}`; if (seen.has(k)) return false; seen.add(k); return true; });
+  return found.filter((f) => {
+    const k = `${f.kind}:${f.kind === 'num' ? f.v.replace(/[,.]/g, '') : f.v}`;
+    if (seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  });
 }
 
 export function present(tok, enc, { legacy = false } = {}) {
@@ -159,6 +235,13 @@ export function present(tok, enc, { legacy = false } = {}) {
       const e = legacy ? enc : enc.replace(/\b[0-9a-f]{7,40}\b/g, (s) => (/[0-9]/.test(s) && /[a-f]/.test(s) ? ' ' : s));
       // A year may be implied by an MM-DD date (the spec lets senders drop the current year).
       if (/^20\d\d$/.test(tok.v) && /\b\d\d-\d\d(?:T|\b)/.test(e)) return true;
+      // Outside --legacy, a number of four or more digits is kept by the same digits with one thousands separator,
+      // , or ., or none: 1,088, 1.088 and 1088 each keep 1,088 and 1088.
+      const digits = tok.v.replace(/[,.]/g, '');
+      if (!legacy && tok.kind === 'num' && /^[1-9]\d{3,}$/.test(digits)) {
+        const [first, ...groups] = digits.replace(/\B(?=(?:\d{3})+$)/g, ' ').split(' ');
+        return new RegExp(`(?<!\\d)${first}(?<sep>[,.]?)${groups.join('\\k<sep>')}(?!\\d|\\k<sep>\\d)`).test(e);
+      }
       return new RegExp(`(?<!\\d)${tok.v}(?!\\d)`).test(e);
     }
   }
