@@ -19,8 +19,11 @@
 // tools/fixtures/meter/skill holds "flip", the switch session with these changes (issue #79): the plugin's skill
 // listing (a 30-token entry) comes right after the lite copy and stays in context past the resume; call 1 also prompts
 // a subagent (14 tokens) and makes a send that fails (11 tokens); a subagent's result with a verb line (18 tokens)
-// arrives after the resume, before call 3; and M4 corrects M3. tools/fixtures/meter/source holds "a" (lite) and "b"
-// (terse), which send "r" (no arm) the same 14-token text; r receives a's copy, then b's, each logged with its msg_id.
+// arrives after the resume, before call 3; and M4 corrects M3. tools/fixtures/meter/source holds how a received
+// message finds its send. "r" (no arm) receives: T1 from "a" (lite) and from "b" (terse), each copy logged with the
+// sender's msg_id and the same name; T2 from "c" (lite) and from "d" (terse), titled so, with no msg_id; T3 twice from
+// "e" (terse); and T4 from a session not read, with a msg_id, though "f" (lite) sent T4 to another under msg_id m-f.
+// Every sender makes the lite session's two calls (2,810.25); r makes three (3,270.75), the first writing all seven.
 // tools/fixtures/meter/stale holds "flop", switch's calls with a terse copy (101 tokens) instead of the lite one, and no
 // messages.
 //
@@ -396,6 +399,9 @@ test('copies from before arms are brevity copies', async () => {
   assert.deepEqual(r.team.arms.brevity.sessions, ['hub', 'peer', 'fork']);
   assert.deepEqual(Object.values(r.team.arms).map((a) => [a.calls, a.sent, a.received]), [[13, 4, 1], [0, 0, 2]]);
   assert.deepEqual(r.team.arms.none.sessions, []);
+  // none's share base: the hub's calls 3 and 4, which carry its received message and its subagent's result until the
+  // compaction, and the peer's call 3 (1,001), which carries both of its own.
+  close(r.team.arms.none.shareBase, callBill(usage(HUB[2]), 'claude-opus-5-5') + callBill(usage(HUB[3]), 'claude-opus-5-5') + 1001);
 });
 
 test('a lite, terse or off copy is the whole injection after its marker; an off copy is the marker alone', async () => {
@@ -589,15 +595,23 @@ test('the skill entry\'s cost goes to the arm of each call that bills it; a mess
   perArmAddsUp(r);
 });
 
-test('a received message takes the arm of the send its msg_id names, though another arm sent the same text', async () => {
+test('a received message takes the arm of its send by msg_id, else by text and sender name, else none', async () => {
   const r = await run(['--project', join(here, 'fixtures', 'meter', 'source')], { count, cwd: dir });
-  assert.deepEqual(messages(session(r, 'r'), 'received').map((m) => [m.arm, m.style, m.tokens]), [['lite', 'lite', 14], ['terse', 'terse', 14]]);
+  // T1 from a (lite) and b (terse), both copies under one name: only the msg_id tells them apart. T2 from c (lite) and
+  // d (terse) with no msg_id: the sender's name does. T3, sent twice by e (terse): two sends left, alike, so terse. T4
+  // from a session not read, with a msg_id: f (lite) sent the same text under another msg_id, so it is not f's.
+  assert.deepEqual(messages(session(r, 'r'), 'received').map((m) => [m.arm, m.style, m.tokens]), [
+    ['lite', 'lite', 14], ['terse', 'terse', 14], ['lite', 'lite', 14], ['terse', 'terse', 14], ['terse', 'terse', 12],
+    ['terse', 'terse', 12], [null, 'prose', 14]]);
   const a = r.team.arms;
   assert.deepEqual(Object.entries(a).map(([arm, x]) => [arm, x.sessions, x.sent, x.received]),
-    [['lite', ['a'], 1, 1], ['terse', ['b'], 1, 1], ['none', ['r'], 0, 0]]);
-  // r writes a's copy at its first call and reads it at the next two; b's arrives after call 1.
-  close(a.lite.saving, saved(14, 0.087) * (5 + 2 + 2 + 0.05 + 0.05));
-  close(a.terse.saving, saved(14, 0.102) * (5 + 2 + 2 + 0.05));
+    [['lite', ['a', 'c', 'f'], 3, 2], ['terse', ['b', 'd', 'e'], 4, 4], ['none', ['r'], 0, 1]]);
+  // Each sender writes its message (output 5) and carries it at its next call (2); r writes each copy at its first call
+  // and reads it at the next two.
+  close(a.lite.saving, saved(14, 0.087) * (3 * (5 + 2) + 2 * (2 + 0.05 + 0.05)));
+  close(a.terse.saving, saved(14, 0.102) * (2 * (5 + 2) + 2 * (2 + 0.05 + 0.05)) + saved(12, 0.102) * (2 * (5 + 2) + 2 * (2 + 0.05 + 0.05)));
+  // r's calls carry messages of every arm: they are in each base.
+  assert.deepEqual([a.lite.shareBase, a.terse.shareBase, a.none.shareBase], [3 * 2810.25 + 3270.75, 3 * 2810.25 + 3270.75, 3270.75]);
   perArmAddsUp(r);
 });
 
@@ -801,10 +815,23 @@ test('a clarification counts only within the window of the recipient\'s calls', 
   }
 });
 
+// In the quality and delegation fixtures, call k of a session (from 0) reads 105 tokens more than the one before and
+// bills 455 + 5.25 k. steps(from, to) adds up calls from to to.
+const steps = (from, to) => Array.from({ length: to - from + 1 }, (_, i) => 455 + 5.25 * (from + i)).reduce((x, y) => x + y, 0);
+
 test('the signals are counted per arm and for the team, per 100 SendMessage deliveries', async () => {
   const r = await quality();
   const a = r.team.arms;
   assert.deepEqual(Object.keys(a), ['lite', 'terse', 'none']);
+  // Ops logs no msg_id. Q9 and Q12 have the same text: both of lead's sends are left, and both are terse, so each copy
+  // is terse; Q10 and the re-send match one send each.
+  assert.deepEqual(messages(session(r, 'ops'), 'received').map((m) => [m.arm, m.style]), Array(4).fill(['terse', 'terse']));
+  assert.deepEqual([r.team.total.receivedTerse, r.team.total.receivedProse], [10, 1]);
+  // none's share base: ops's calls, and lead's calls 9 to 13, which carry ops's answer (prose, with no arm).
+  assert.equal(session(r, 'ops').bill, steps(0, 2));
+  close(a.none.shareBase, steps(0, 2) + steps(8, 12));
+  // In a window where lead's calls carry only that answer from none, and it saves nothing, none has no row.
+  assert.deepEqual(Object.keys((await quality('--since', '2026-03-03T09:02:05Z', '--until', '2026-03-03T09:02:55Z')).team.arms), ['lite', 'terse']);
   assert.deepEqual(['lite', 'terse', 'none'].map((k) => [a[k].delivered, a[k].clarified, a[k].corrected, a[k].resent]), [
     [7, 0, 1, 0], [10, 2, 1, 1], [1, 0, 0, 0],
   ]);
@@ -848,11 +875,14 @@ test('a received message is matched by text when its msg_id is not a send\'s, an
 test('the signals leave no message text or session names in the output', async () => {
   const json = node(['--project', qualityDir, '--json']);
   assert.equal(json.status, 0, json.stderr);
-  assert.doesNotMatch(json.stdout, /feat\/cart|tests\/cart|Correction|WITHDRAWN|runner|uds:|a1b2c3|"(?:text|peer|msgId|ord)"/);
+  assert.doesNotMatch(json.stdout, /feat\/cart|tests\/cart|Correction|WITHDRAWN|runner|uds:|a1b2c3|"(?:text|peer|msgId|ord|source|firstBilled|lastBilled|shareCalls|carried)"/);
   const text = node(['--project', qualityDir]);
   assert.doesNotMatch(text.stdout, /feat\/cart|uds:|a1b2c3/);
   const records = await meterRecords(transcripts([qualityDir]), { count });
-  for (const m of records.flatMap((x) => x.messages)) for (const key of ['text', 'peer', 'msgId', 'ord', 'hash']) assert.ok(!(key in m), key);
+  for (const m of records.flatMap((x) => x.messages)) {
+    for (const key of ['text', 'peer', 'msgId', 'ord', 'hash', 'source', 'firstBilled', 'lastBilled']) assert.ok(!(key in m), key);
+  }
+  for (const x of records) for (const key of ['shareCalls', 'carried']) assert.ok(!(key in x), key);
 });
 
 const delegationDir = join(here, 'fixtures', 'meter', 'delegation');
@@ -916,6 +946,10 @@ test('the delegation signals are counted apart from the SendMessage ones, per ar
   assert.deepEqual(['lite', 'terse', 'none'].map((k) => [a[k].delegations, a[k].delegationsStarted, a[k].delegationsClarified,
     a[k].delegationsCorrected, a[k].delegationsResent]), [[0, 0, 0, 0, 0], [8, 7, 1, 4, 3], [0, 0, 0, 0, 0]]);
   assert.equal(a.lite.delegationPer100, null, 'with no prompt, no rate');
+  // terse's share base: every session but s0 runs under terse (coord, coord2) or carries a terse prompt in all its
+  // calls. none's: the sessions with no arm, and coord's calls 8 to 20, which carry their reports.
+  close(a.terse.shareBase, t.bill - session(r, 's0').bill);
+  close(a.none.shareBase, a.none.bill + steps(7, 19));
   assert.deepEqual([a.terse.delivered, a.terse.clarified, a.terse.corrected], [11, 2, 2]);
   const text = render(r);
   assert.match(text, /^delegation signals, heuristics, apart from the SendMessage ones: /m);
@@ -930,11 +964,13 @@ test('the delegation signals are counted apart from the SendMessage ones, per ar
 test('the delegation signals leave no prompt text or session names in the output', async () => {
   const json = node(['--project', delegationDir, '--json']);
   assert.equal(json.status, 0, json.stderr);
-  assert.doesNotMatch(json.stdout, /cart|acme|Synthetic|uds:|"(?:text|peer|msgId|ord|hash|title|key)"/);
+  assert.doesNotMatch(json.stdout, /cart|acme|Synthetic|uds:|"(?:text|peer|msgId|ord|hash|title|key|source|firstBilled|lastBilled)"/);
   const text = node(['--project', delegationDir]);
   assert.equal(text.status, 0, text.stderr);
   assert.doesNotMatch(text.stdout, /cart|acme|Synthetic|uds:/);
   const records = await meterRecords(transcripts([delegationDir]), { count });
-  for (const m of records.flatMap((x) => x.messages)) for (const key of ['text', 'peer', 'msgId', 'ord', 'hash', 'key']) assert.ok(!(key in m), key);
+  for (const m of records.flatMap((x) => x.messages)) {
+    for (const key of ['text', 'peer', 'msgId', 'ord', 'hash', 'key', 'source', 'firstBilled', 'lastBilled']) assert.ok(!(key in m), key);
+  }
   for (const x of records) assert.ok(!('first' in x));
 });

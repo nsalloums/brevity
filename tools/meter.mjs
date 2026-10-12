@@ -69,7 +69,8 @@
 //   line after its first starts with a SPEC.md section 3 verb (DO, NO, REPLY, ASK, ASKn, An, WILL, DONE, IF, HOLD, GO,
 //   DEC, FIX, WARN, WHY, CHK, FILES, OWN, TELL, ORDER, NUM, HDR, MERGED, READY, ACK), and prose if not. A received
 //   message takes the arm and style of its send, matched as the quality signals match it (below), when a measured
-//   transcript sent it; otherwise it has no arm.
+//   transcript sent it. When that match stays ambiguous but every send left has the same arm and style, such as one
+//   text sent twice by one session, it takes those. Otherwise it has no arm.
 //   A SendMessage with no text, such as a notify_when_idle subscription, is not a message.
 //   Tokens (issue #76): msg tokens (messageTokens) adds what a session sent and what it received, so a message between
 //   two measured sessions counts at each end, and twice in a total. sent tokens (sentTokens) counts the delivered
@@ -87,7 +88,8 @@
 //   flag delivered SendMessage messages that may not have been understood. A received message is matched to its
 //   send by msg_id, else by text: the only send with that text, else the only one whose sender has the name the
 //   message gives ("from" or "name"; a session's names are its title and what other sessions call it in linked
-//   messages). When that stays ambiguous, the message is not matched and flags nothing. A reply's addressee is matched
+//   messages). A send whose own msg_id is known and differs from the message's is never its match. When that stays
+//   ambiguous, the message is not matched and flags nothing. A reply's addressee is matched
 //   by the transcript that received it, or by name (SendMessage's "to" against the sender's "from" or "name", without
 //   a trailing "[hex]" tag, and a name cut short with "…" matches what it starts). In a transcript that continues a
 //   session under a new id or forks it, copied messages are not owned, so their signals go to the original. A
@@ -836,17 +838,31 @@ function signals(records, window) {
       if (m.dir === 'sent' && at(receiverOf, m.msgId)) names.get(at(receiverOf, m.msgId)).push(...m.peer);
     }
   }
-  // The owned, delivered send that a message is or copies: by msg_id, else the only send with its text, else the only
-  // one of those whose sender (for a received message) or recipient (for a sent copy) has the name the message gives.
-  const original = (m) => {
-    if (at(byId, m.msgId)) return at(byId, m.msgId);
-    const all = byText.get(m.hash) ?? [];
-    if (all.length === 1) return all[0];
-    const fits = all.filter((c) => samePeer(m.dir === 'sent' ? c.peer : names.get(senderOf.get(c)), m.peer));
-    return fits.length === 1 ? fits[0] : undefined;
+  // The owned, delivered sends that a message may be or copy: the one with its msg_id; else those with its text, less
+  // any whose own msg_id is known and another; and when more than one is left, those whose sender (for a received
+  // message) or recipient (for a sent copy) has the name the message gives.
+  const known = (id) => id !== null && id !== undefined;
+  const candidates = (m) => {
+    if (at(byId, m.msgId)) return [at(byId, m.msgId)];
+    const all = (byText.get(m.hash) ?? []).filter((c) => !(known(m.msgId) && known(c.msgId)));
+    if (all.length < 2) return all;
+    return all.filter((c) => samePeer(m.dir === 'sent' ? c.peer : names.get(senderOf.get(c)), m.peer));
   };
-  // The send each received message is, by the same matching: settle gives the message its arm and style.
-  for (const r of records) for (const m of r.messages) if (m.dir === 'received') m.source = original(m) ?? null;
+  // The send that a message is or copies, when the matching leaves only one.
+  const original = (m) => {
+    const c = candidates(m);
+    return c.length === 1 ? c[0] : undefined;
+  };
+  // The send whose arm and style each received message takes in settle: the original, else, when several sends are
+  // left and they agree on both, the first of them; else none.
+  const alike = (c) => c.length > 1 && c.every((x) => x.arm === c[0].arm && styleOf(x) === styleOf(c[0]));
+  for (const r of records) {
+    for (const m of r.messages) {
+      if (m.dir !== 'received') continue;
+      const c = candidates(m);
+      m.source = c.length === 1 || alike(c) ? c[0] : null;
+    }
+  }
   // Whether a received message comes from the session a sent one goes to.
   const from = (m, n) => {
     const s = senderOf.get(original(m));
@@ -949,19 +965,20 @@ const RECEIVED = ['received', 'delegation-received'];
 const WRITTEN = [...SENT, 'subagent-prompt'];
 // A message that the estimate counts as compressed: written in brevity, lite or terse, and not under off.
 const compressed = (m) => m.style !== 'prose' && m.arm !== 'off';
+// The style a message is written in: its arm's under lite and terse, else brevity when it has a verb line, else prose.
+const styleOf = (m) => (m.arm === 'lite' || m.arm === 'terse' ? m.arm : m.brevity ? 'brevity' : 'prose');
 
 // Each message's style (brevity, lite, terse or prose), ratio and estimated saving. A received message takes the arm
 // and style of its send, matched as the quality signals match it (see signals), and a session's first message is a
 // received delegation prompt when it is the prompt that started the session (see linkDelegations).
 function settle(records, ratios) {
-  const style = (m) => (m.arm === 'lite' || m.arm === 'terse' ? m.arm : m.brevity ? 'brevity' : 'prose');
-  for (const r of records) for (const m of r.messages) if (WRITTEN.includes(m.dir)) m.style = style(m);
+  for (const r of records) for (const m of r.messages) if (WRITTEN.includes(m.dir)) m.style = styleOf(m);
   for (const r of records) {
     for (const m of r.messages) {
       if (WRITTEN.includes(m.dir)) continue;
       const from = m.dir === 'received' ? m.source : undefined;
       m.arm = from?.arm ?? null;
-      m.style = from?.style ?? style(m);
+      m.style = from?.style ?? styleOf(m);
     }
     const f = r.first;
     if (f?.delegation) {

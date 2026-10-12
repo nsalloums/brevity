@@ -196,8 +196,9 @@ them:
   counts under the arm of each call that bills it.
 - Each message, with its estimated saving and quality signals, counts under the arm it was written under. A
   received message takes the arm of its send, found by `msg_id`, else by its text, else by its sender's name, as
-  for the quality signals below. A received message from a session the meter did not read, and a subagent's
-  result, count under none.
+  for the quality signals below. When several sends are left and they share an arm and style, such as one text
+  sent twice, it takes those. A received message from a session the meter did not read, and a subagent's result,
+  count under none.
 
 A session counts under every arm it had a call under, so the sessions column can add up to more than the team. The
 output names the sessions that had more than one arm. Each arm's shares divide by its share base, the bill of the
@@ -231,8 +232,9 @@ traffic yet. A delivered message is:
 - **resent** when the sender sends almost the same text to the same recipient again (a similarity of 0.8 or more)
   without a reply in between.
 
-The meter matches each message to its recipient by the `msg_id` that both transcripts log, else by its text. When
-two sessions sent the same text, it uses the sender's name, and if that stays ambiguous the message flags nothing.
+The meter matches each message to its recipient by the `msg_id` that both transcripts log, else by its text, leaving
+out any send that logged another `msg_id`. When two sessions sent the same text, it uses the sender's name, and if
+that stays ambiguous the message flags nothing.
 It matches a reply to its addressee by name. A failed send never counts.
 
 Delegation prompts (`spawn_task`) get the same three signals in a table of their own, per arm and for the team, so

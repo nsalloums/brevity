@@ -20,12 +20,16 @@ Changes waiting on `next` for the next release (see [RELEASING.md](RELEASING.md)
   - Each message, with its saving and quality signals, counts under the arm it was written under. A received
     message from a session the meter did not read, and a subagent's result, count under none.
   - A received message takes the arm and style of its send, matched as the quality signals match it: `msg_id`, then
-    the only send with its text, then the sender's name. Before, it took them from the last send read with the same
-    text. A received message whose `msg_id` names another sender can change its arm, style and saving, and so the
-    team's estimated saving.
+    the only send with its text, then the sender's name. When several sends are left and they share an arm and
+    style, as when one session sent a text twice, it takes those. Before, it took them from the last send read with
+    the same text. A received message whose `msg_id` names another sender than that send, or whose text and name fit
+    sends of different arms, can change its arm, style and saving, and so the team's estimated saving.
+  - Matching never takes a send that logged a `msg_id` other than the message's. For the quality signals, that can
+    move or drop a flag where a session the meter did not read sent the same text as one it read.
   - Each arm's shares divide by its share base (`shareBase`): the bill of the calls that ran under the arm or
     carried one of its copies or messages. A call that carried more than one arm is in each base, so the bases and
-    the shares do not add up across arms. Every arm's shares change.
+    the shares do not add up across arms. An arm's shares change when its calls carried another arm's copies or
+    messages, or its own rode in another arm's calls; otherwise they are 0.9.0's.
   - A session counts under every arm it had a call under, and the output names the sessions with more than one.
 
   A session's numbers stay in one arm's row only when its counted calls, and the copies and messages those calls
