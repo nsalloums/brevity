@@ -87,10 +87,11 @@ test('--legacy prints what 0.7.0 printed', () => {
   assert.equal(r.status, LEGACY_OUTPUT.status);
   for (const [k, v] of Object.entries(LEGACY_OUTPUT.summary)) assert.equal(r.summary[k], v, k);
   assert.deepEqual(r.lines, LEGACY_OUTPUT.lines);
-  // The default coverage adds the one-digit #7, views.py:42 and the -57; the colour copied verbatim now passes.
+  // The default coverage adds the one-digit #7, views.py:42, the 42 of 42-line (#64) and the -57; the colour copied
+  // verbatim now passes.
   const d = run([file(MESSAGES), file(ENCODINGS), '--dict', file(DICT)]);
-  assert.equal(d.summary.identifiersChecked, 21);
-  assert.deepEqual(d.lines, ['b: num=12', 'c: ref=7, line=42, num=57', 'd: quote=Keep what matters', 'f: ref=12']);
+  assert.equal(d.summary.identifiersChecked, 22);
+  assert.deepEqual(d.lines, ['b: num=12', 'c: ref=7, line=42, num=42, num=57', 'd: quote=Keep what matters', 'f: ref=12']);
 });
 
 test('commit SHAs: the encoding keeps a prefix of 9 characters, or the whole of a shorter SHA', () => {
@@ -175,12 +176,15 @@ test('numbers and diffstats of two or more digits by default, of any size with -
   assert.deepEqual(toks('Diff +12/-34', { legacy: true }), ['num=12']);
   assert.deepEqual(toks('Diff +12 -34', { legacy: true }), ['num=12', 'num=34']);
   assert.deepEqual(misses('Diff +12/-34', 'Diff +12'), ['num=34']);
-  // The -M follows the rules of other numbers: after a thousands separator in N, before a unit, not before a-f.
-  assert.deepEqual(toks('Diff +1,204/-87'), ['num=204', 'num=87']);
-  assert.deepEqual(toks('Diff +5/-12,345'), ['num=345']);
+  // N and -M follow the rules of other numbers: grouped in thousands, before a unit, not before hex.
+  assert.deepEqual(toks('Diff +1,204/-87'), ['num=1,204', 'num=87']);
+  assert.deepEqual(toks('Diff +1,204/-87', { legacy: true }), ['num=204']);
+  assert.deepEqual(toks('Diff +5/-12,345'), ['num=12,345']);
   assert.deepEqual(toks('Took +12/-34ms'), ['num=12', 'num=34']);
   assert.deepEqual(toks('Took 34ms'), ['num=34']);
-  assert.deepEqual(toks('A +12/-34-line diff'), []);
+  assert.deepEqual(toks('A +12/-34-line diff'), ['num=12', 'num=34']);
+  assert.deepEqual(toks('A +12/-34-line diff', { legacy: true }), []);
+  assert.deepEqual(toks('Diff +12/-34abcd'), ['num=12']);
   assert.deepEqual(toks('Size v2+12/-34 here'), ['num=12']);
   // Small diffstats and numbers only with the option.
   assert.deepEqual(toks('Diff +5/-3'), []);
@@ -193,8 +197,9 @@ test('numbers and diffstats of two or more digits by default, of any size with -
   assert.deepEqual(misses('3 files, 12 tests', '12 tests', { smallNumbers: true }), ['num=3']);
   // Two digits count even below 10, as in 0.7.0.
   assert.deepEqual(toks('Retry count 03'), ['num=03']);
-  // Numbers glued to a unit with a-f, or after a slash, are not checked (see the header).
-  assert.deepEqual(toks('A 30-day window, 512mb, 118/120 green'), ['num=118']);
+  // 0.7.0 skipped a number glued to a unit with a-f, and one after a slash; the default checks both (#64).
+  assert.deepEqual(toks('A 30-day window, 512mb, 118/120 green', { legacy: true }), ['num=118']);
+  assert.deepEqual(toks('A 30-day window, 512mb, 118/120 green'), ['num=30', 'num=512', 'num=118', 'num=120']);
   // A small number that also sits inside a SHA is still checked; one equal to a reference is checked as the reference.
   assert.deepEqual(toks('abc1234 has 2 fixes', { smallNumbers: true }), ['sha=abc1234', 'num=2']);
   assert.deepEqual(toks('#7 adds 7 files', { smallNumbers: true }), ['ref=7']);
@@ -215,6 +220,84 @@ test("a SHA's digits in the encoding do not keep a number, outside --legacy", ()
   assert.equal(present({ kind: 'num', v: '4' }, 'a 3fa4c9e b'), false);
   assert.equal(present({ kind: 'num', v: '4' }, 'a 3fa4c9e b', { legacy: true }), true);
   assert.equal(present({ kind: 'num', v: '12' }, 'a 120'), false);
+});
+
+const ISSUE_64 = 'Use a 30-day window, a 200-line cap and 512mb; suite at 118/120 green';
+
+test("the issue's own example reports its misses (#64)", () => {
+  assert.deepEqual(misses(ISSUE_64, 'Use a window, a cap; suite at 118 green'), ['num=30', 'num=200', 'num=512', 'num=120']);
+  assert.deepEqual(misses(ISSUE_64, 'Use a window, a cap; suite at 118 green', { legacy: true }), []);
+  assert.deepEqual(misses(ISSUE_64, '30d window, 200-line cap, 512 MB; suite 118/120 green'), []);
+  const r = cli(ISSUE_64, 'Use a window, a cap; suite at 118 green');
+  assert.equal(r.status, 1);
+  assert.deepEqual(r.lines, ['m1: num=30, num=200, num=512, num=120']);
+});
+
+test('a number before a unit, glued or after - or /, but not inside hex', () => {
+  assert.deepEqual(toks('Keep 14d, 30fps, 8080/tcp, 64kb/s, a 42-line diff, a 90-day-old token, 1,024mb'),
+    ['num=14', 'num=30', 'num=8080', 'num=64', 'num=42', 'num=90', 'num=1,024']);
+  assert.deepEqual(toks('Keep 14d, 30fps, 8080/tcp, 64kb/s, a 42-line diff', { legacy: true }), []);
+  // Kept by the number in any form; dropped when only the unit or a SHA carries it.
+  assert.deepEqual(misses('A 30-day window', 'window 30d'), []);
+  assert.deepEqual(misses('A 30-day window', 'window: 30 days'), []);
+  assert.deepEqual(misses('A 30-day window', 'month-long window'), ['num=30']);
+  assert.deepEqual(misses('A 30-day window', 'window 30ab12cd'), ['num=30']);
+  // Hex is not a number before a unit: two or more letters a-f glued, letters a-f only after - or /, 0x, a SHA, a UUID.
+  for (const text of ['Value 12ab', 'Offset 0xff', 'Head 1234abcd', 'Head 1234567d', 'Key 1234-abcd', 'Id 12345678-1234-5678-9abc-def012345678']) {
+    assert.deepEqual(toks(text, { smallNumbers: true }).filter((t) => t.startsWith('num=')), [], text);
+  }
+  assert.deepEqual(toks('Head 1234abcd'), ['sha=1234abcd']);
+});
+
+test('the later numbers of N/M and N:M, but not times, URLs or paths', () => {
+  assert.deepEqual(toks('Suite at 118/120 green, ratio 16:9, page 3/15'), ['num=118', 'num=120', 'num=16', 'num=15']);
+  assert.deepEqual(toks('Suite at 118/120 green, ratio 16:9, page 3/15', { smallNumbers: true }), ['num=118', 'num=120', 'num=16', 'num=9', 'num=3', 'num=15']);
+  assert.deepEqual(toks('Suite at 118/120 green, ratio 16:9', { legacy: true }), ['num=118', 'num=16']);
+  assert.deepEqual(misses('Suite at 118/120 green', 'suite 118/120'), []);
+  assert.deepEqual(misses('Suite at 118/120 green', 'suite 120 of 118'), []);
+  assert.deepEqual(misses('Suite at 118/120 green', 'suite 118 green'), ['num=120']);
+  assert.deepEqual(misses('Passed 3/5', 'passed 3', { smallNumbers: true }), ['num=5']);
+  assert.deepEqual(toks('Passed 3/5'), []);
+  // A chain counts each number; a date with slashes is one.
+  assert.deepEqual(toks('Due 10/12/2031'), ['num=10', 'num=12', 'num=2031']);
+  // A time keeps only its hour, as before: hours up to 24, then two-digit minutes and seconds.
+  assert.deepEqual(toks('Standup at 14:30, deploy at 9:05:30, close at 24:00'), ['num=14', 'num=24']);
+  assert.deepEqual(toks('Standup at 14:30, deploy at 9:05:30', { smallNumbers: true }), ['num=14', 'num=9']);
+  assert.deepEqual(toks('Ran 125:30'), ['num=125', 'num=30']);
+  // Inside a URL, before a further path, after a file:line or a word, or with a hex head, the later number is skipped.
+  assert.deepEqual(toks('Open https://ci.example.dev/runs?range=12/34 now'), ['num=12']);
+  assert.deepEqual(toks('Moved to 2026/10/notes.md'), ['num=2026']);
+  assert.deepEqual(toks('Broke app/views.py:42:17'), ['line=42']);
+  assert.deepEqual(toks('Serve on localhost:3000 and node:20'), []);
+  assert.deepEqual(toks('Card 00:1a:2b:3c:4d:5e', { smallNumbers: true }), []);
+  // A SHA after the slash is not a number; the number before it still is.
+  assert.deepEqual(toks('Compare 12/3fa4c9e', { smallNumbers: true }), ['sha=3fa4c9e', 'num=12']);
+});
+
+test('a number grouped in thousands is one number, kept with either separator or none', () => {
+  assert.deepEqual(toks('Scanned 1,088 files and 37,798,511 rows; 2.637 in a dot locale'), ['num=1,088', 'num=37,798,511', 'num=2.637']);
+  // 0.7.0 read a grouped number from its last group, or from nothing after a dot.
+  assert.deepEqual(toks('Scanned 1,088 files and 37,798,511 rows; 2.637 in a dot locale', { legacy: true }), ['num=088', 'num=37', 'num=798', 'num=511']);
+  for (const enc of ['scanned 1,088', 'scanned 1.088', 'scanned 1088']) assert.deepEqual(misses('Scanned 1,088 files', enc), [], enc);
+  for (const enc of ['read 2,637 rows', 'read 2637 rows', 'read 2.637 rows']) assert.deepEqual(misses('Read 2.637 rows', enc), [], enc);
+  assert.deepEqual(misses('Rows 37,798,511', 'rows 37798511'), []);
+  // A plain number of four or more digits is kept by its grouped form too.
+  assert.deepEqual(misses('Scanned 1088 files', 'scanned 1,088'), []);
+  assert.deepEqual(misses('Build 1234567 passed', 'build 1.234.567 ok'), []);
+  // Other digits, a longer number, a rounded decimal or mixed separators do not keep it.
+  assert.deepEqual(misses('Scanned 1,088 files', 'scanned 1,000 files'), ['num=1,088']);
+  assert.deepEqual(misses('Scanned 1,088 files', 'scanned 1,088,000 files'), ['num=1,088']);
+  assert.deepEqual(misses('Scanned 1,088 files', 'scanned 21,088 files'), ['num=1,088']);
+  assert.deepEqual(misses('Read 2.637 rows', 'read 2.64 rows'), ['num=2.637']);
+  assert.deepEqual(misses('Rows 37,798,511', 'rows 37,798.511'), ['num=37,798,511']);
+  assert.deepEqual(misses('Rows 37,798,511', 'rows 37,798'), ['num=37,798,511']);
+  // 1,088 and 1088 are one number.
+  assert.deepEqual(toks('1088 rows, then 1,088 rows'), ['num=1088']);
+  // Groups have exactly three digits and the first is not 0, so versions, addresses, decimals and short lists are not
+  // grouped: they read as before.
+  for (const text of ['Bump to 1.2.3', 'Host 10.0.0.1', 'Ratio 0.125', 'Took 1,5 s', 'Ids 10,20,30', 'Pick 1,234,56']) {
+    assert.deepEqual(toks(text), toks(text, { legacy: true }), text);
+  }
 });
 
 test('quotes must appear verbatim, and edit markup carries both texts', () => {
@@ -250,8 +333,8 @@ test('the output states the coverage the run used', () => {
   const def = cli('#7 at a.py:3', '#7 at a.py:3');
   assert.equal(def.status, 0);
   assert.equal(Object.keys(def.summary)[0], 'coverage');
-  assert.equal(def.summary.coverage, 'SHAs (9-character prefix), #N of 1+ digits and PR/issue URLs, file:line for any extension of 1-8 letters and digits except hosts, numbers and +N/-M diffstats of 2+ digits, «quotes» of up to 120 characters');
-  assert.equal(cli('x', 'x', '--small-numbers').summary.coverage, 'SHAs (9-character prefix), #N of 1+ digits and PR/issue URLs, file:line for any extension of 1-8 letters and digits except hosts, numbers and +N/-M diffstats of any size, «quotes» of up to 120 characters');
+  assert.equal(def.summary.coverage, 'SHAs (9-character prefix), #N of 1+ digits and PR/issue URLs, file:line for any extension of 1-8 letters and digits except hosts, numbers and +N/-M diffstats of 2+ digits, also before a unit (30-day, 512mb), after N/ or N: except times (118/120) and grouped in thousands (1,088 or 2.637), «quotes» of up to 120 characters');
+  assert.equal(cli('x', 'x', '--small-numbers').summary.coverage, 'SHAs (9-character prefix), #N of 1+ digits and PR/issue URLs, file:line for any extension of 1-8 letters and digits except hosts, numbers and +N/-M diffstats of any size, also before a unit (30-day, 512mb), after N/ or N: except times (118/120) and grouped in thousands (1,088 or 2.637), «quotes» of up to 120 characters');
   assert.equal(cli('x', 'x', '--legacy').summary.coverage, 'legacy (brevity 0.7.0): SHAs (9-character prefix), #N of 2+ digits and PR/issue URLs, file:line for .ts .tsx .js .jsx .mjs .md .sql .json .yaml .yml .css, numbers and diffstats of 2+ digits but not the -M of +N/-M, «quotes» of up to 120 characters');
   assert.equal(coverage(), def.summary.coverage);
   // The counts by kind add up, and the misses are told apart from the checks.
@@ -293,8 +376,9 @@ test('the tool runs when it is reached through a symlink or a junction', (t) => 
 
 test('the default coverage adds to the legacy one and never drops a token', () => {
   const texts = [
-    ...MESSAGES.map((m) => m.text), ISSUE, 'See https://example.com:8080/src/a.ts:9 and #1234',
+    ...MESSAGES.map((m) => m.text), ISSUE, ISSUE_64, 'See https://example.com:8080/src/a.ts:9 and #1234',
     'Head abc1234, 3 tests, v1.2.3 and 2026-10-12 at 14:30', 'foo.py:12.ts:34 and «q 5»', 'C#7 &#39; #3b82f6 #12ab34',
+    'Keep 14d, 8080/tcp, 12ab, 0xff, 3/5 and 16:9 at 9:05:30', 'Id 12345678-1234-5678-9abc-def012345678 on 10.0.0.1:8080/health',
   ];
   for (const text of texts) {
     const legacy = toks(text, { legacy: true });
@@ -303,4 +387,7 @@ test('the default coverage adds to the legacy one and never drops a token', () =
     for (const t of legacy) assert.ok(def.includes(t), `${text}: default lost ${t}`);
     for (const t of def) assert.ok(small.includes(t), `${text}: --small-numbers lost ${t}`);
   }
+  // The one exception: a grouped number replaces the last group that 0.7.0 read.
+  assert.deepEqual(toks('Scanned 4,215 files', { legacy: true }), ['num=215']);
+  assert.deepEqual(toks('Scanned 4,215 files'), ['num=4,215']);
 });

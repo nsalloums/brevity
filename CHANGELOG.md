@@ -3,6 +3,14 @@
 Every entry follows [RELEASING.md](RELEASING.md): a criticality level, why the release exists, what changed, the
 evidence, compatibility and upgrade steps. Versions follow semantic versioning read from the protocol's side.
 
+## [Unreleased]
+
+Changes waiting on `next` for the next release (see [RELEASING.md](RELEASING.md)).
+
+- `tools/idcheck.mjs` also checks, by default, a number before a unit (`30-day`, `512mb`, `8080/tcp`), the later
+  numbers of `N/M` and `N:M` except times (`118/120`), and a number grouped in thousands as one number (`1,088`,
+  `2.637`), kept with `,`, `.` or no separator. `--legacy` is unchanged (#64).
+
 ## [0.8.0] - 2026-10-11
 
 **Criticality:** normal. The identifier check covers what the docs said it covered, the meter's quality signals

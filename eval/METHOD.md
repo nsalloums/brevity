@@ -117,17 +117,25 @@ A synthetic message and its gold facts, with the rubric clause each falls under:
     checked, a name inside a URL, after `user@`, before `/path` or ending in `.com`, `.net`, `.org`, `.io` or
     `.internal` is a host and is skipped; a port on any other host (`db.ci.local:5432`) is checked as a line;
   - integers and +N/-M diffstats of two or more digits (10 or more, or zero-padded such as 09), or of any size with
-    `--small-numbers`. A SHA's digits in the encoding do not keep a number;
+    `--small-numbers`. A SHA's digits in the encoding do not keep a number. These count too:
+    - a number before a unit, glued or after `-` or `/` (`30-day`, `512mb`, `8080/tcp`), unless the letters read as
+      hex (`12ab`, `0xff`, `1234-abcd`, a SHA such as `1234abcd`);
+    - the later numbers of `N/M` and `N:M` (the 120 in `118/120`, `16:9`), except the minutes and seconds of a time
+      (`14:30`), a pair inside a URL, or one followed by a further `/path`;
+    - a number grouped in thousands with `,` or `.` throughout (`1,088`, `37,798,511`, `2.637`), read as one
+      number. The encoding keeps it, and any number of four or more digits, with the same digits and one
+      separator, either one, or none: `1,088`, `1.088` and `1088` all count. A three-place decimal (`2.637 s`)
+      reads the same way, so a verbatim copy keeps it;
   - text inside «...», up to 120 characters.
 
   The output's `coverage` line names what the run checked, and the header of `tools/idcheck.mjs` lists every
   exception. Nothing else is checked: text in ordinary quotes, a number right after a letter, digit, `#`, `.`, `:`,
-  `/` or `-` (the minutes in 14:30, a port after `localhost:`, the 120 in 118/120), a number followed in the same
-  word by a letter a-f (30-day, 512mb), a number with a thousands separator beyond its last group, or a file with
-  no extension (`Makefile:12`) can go missing unnoticed. Numbers below 10 are off by default because list markers
-  and counts written as words would show as lost; turn them on with `--small-numbers` and read what they flag.
-  `--legacy` runs the narrower coverage of brevity 0.7.0, which the published figures used
-  ([#56](https://github.com/nsalloums/brevity/issues/56)). If your traffic names other kinds of identifiers, widen
+  `/` or `-` other than those above (the minutes in 14:30, a port after `localhost:`, the 10 in 2026-10-11), a
+  number inside hex, or a file with no extension (`Makefile:12`) can go missing unnoticed. Numbers below 10 are off
+  by default because list markers and counts written as words would show as lost; turn them on with
+  `--small-numbers` and read what they flag. `--legacy` runs the narrower coverage of brevity 0.7.0, which the
+  published figures used ([#56](https://github.com/nsalloums/brevity/issues/56),
+  [#64](https://github.com/nsalloums/brevity/issues/64)). If your traffic names other kinds of identifiers, widen
   the patterns before you trust identifier survival. `--dict aliases.json` lets an alias count as the long form it
   stands for. An encoding that fails goes back to its encoder before anything is decoded. Give every arm the same
   retry rule: #26 proposes one gated retry.
